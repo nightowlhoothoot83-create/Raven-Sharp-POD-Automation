@@ -191,7 +191,7 @@ export default function Pricing() {
             <div className="w-px h-10 bg-white/10" />
             <div className="text-sm text-[var(--muted)]">
               ~$0.10 per image generated<br />
-              <span className="text-xs text-[var(--subtle)]">FLUX.1 via Replicate · Instant top-up</span>
+              <span className="text-xs text-[var(--subtle)]">AI image generation · Instant top-up</span>
             </div>
           </div>
         </div>

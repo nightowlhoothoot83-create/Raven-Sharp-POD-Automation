@@ -2,12 +2,13 @@ import React from "react";
 import { Link } from "react-router-dom";
 
 const BRANDS = [
-  { name: "Mystical Moments",  logo: "/brands/mysticalMoments.png",  url: "#",                            desc: "Photography" },
-  { name: "Zyia Creations",    logo: "/brands/zyiaCreations.png",     url: "#",                            desc: "Digital Art" },
+  { name: "Mystical Moments",  logo: "/brands/mysticalMoments.png",  url: "https://mystical-moments.net", desc: "Photography" },
+  { name: "Zyia Creations",    logo: "/brands/zyiaCreations.png",     url: "https://www.etsy.com/shop/ZyiaCreations", desc: "Digital Art" },
   { name: "Spew Crew Kids",    logo: "/brands/spewCrew.png",          url: "https://youtube.com/@spewcrewkids", desc: "Kids Content" },
-  { name: "Feed The Feed",     logo: "/brands/feedTheFeed.png",       url: "#",                            desc: "Social Media" },
+  { name: "Feed The Feed",     logo: "/brands/feedTheFeed.png",       url: "https://www.facebook.com/feedthefeed", desc: "Social Media" },
   { name: "MyCalTools",        logo: "/brands/myCalTools.png",        url: "https://mycalctools.net",      desc: "Calculator Tools" },
   { name: "MyCalendarTools",   logo: "/brands/myCalendarTools.png",   url: "https://mycalendartools.net",  desc: "Calendar Tools" },
+  { name: "Wheel Name Picker", logo: "/brands/wheelNamePicker.png",   url: "https://wheelnamepicker.com.au", desc: "Free Wheel Spinner" },
 ];
 
 const LEGAL_LINKS = [
@@ -87,6 +88,7 @@ export default function ADGFooter() {
             <h4 className="text-xs font-mono uppercase tracking-widest text-[var(--muted)] mb-3">Company</h4>
             <ul className="space-y-2">
               <li><a href="https://ascensiondigitalgroup.com" className="text-[var(--subtle)] hover:text-[var(--text)] transition-colors">Ascension Digital</a></li>
+              <li><Link to="/about" className="text-[var(--subtle)] hover:text-[var(--text)] transition-colors">About</Link></li>
               <li><a href="mailto:ascensiondigitalagency@outlook.com" className="text-[var(--subtle)] hover:text-[var(--text)] transition-colors">Contact Us</a></li>
             </ul>
           </div>

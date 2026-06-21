@@ -14,6 +14,7 @@ import Pricing from "./pages/Pricing";
 import Schedules from "./pages/Schedules";
 import ImageGen from "./pages/ImageGen";
 import LegalPage from "./pages/Legal";
+import About from "./pages/About";
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
@@ -44,6 +45,7 @@ function AppRoutes() {
         <Route path="/"         element={<Landing />} />
         <Route path="/pricing"  element={<Pricing />} />
         <Route path="/legal/:page" element={<LegalPage />} />
+        <Route path="/about"    element={<About />} />
 
         {/* Auth */}
         <Route path="/login"    element={<AuthRoute><Login /></AuthRoute>} />
