@@ -35,7 +35,21 @@ const TIERS = [
     limit: null, featured: false, cta: "Go Creator",
   },
   {
-    id: "pro", name: "Pro", monthly: 129, annual: 1290,
+    id: "growth", name: "Growth", monthly: 69, annual: 690,
+    desc: "Scaling sellers, more headroom.",
+    perks: [
+      "35 pipeline runs / month",
+      "15 images per run",
+      "60 AI gen credits / month",
+      "Schedule image generation",
+      "5 style profiles",
+      "Inline listing editing",
+      "Duplicate run feature",
+    ],
+    limit: null, featured: false, cta: "Go Growth",
+  },
+  {
+    id: "pro", name: "Pro", monthly: 119, annual: 1190,
     desc: "Full automation. Wake up to listings.",
     perks: [
       "50 pipeline runs / month",
@@ -50,13 +64,13 @@ const TIERS = [
     limit: null, featured: true, cta: "Go Pro",
   },
   {
-    id: "agency", name: "Agency", monthly: 199, annual: 1990,
-    desc: "Multiple brands. Unlimited scale.",
+    id: "agency", name: "Agency", monthly: 189, annual: 1890,
+    desc: "Multiple brands. Real scale.",
     perks: [
       "80 pipeline runs / month",
       "40 images per run",
       "250 AI gen credits / month",
-      "Unlimited scheduling",
+      "Full scheduling",
       "5 brand workspaces",
       "Unlimited style profiles",
       "White label CSV exports",
