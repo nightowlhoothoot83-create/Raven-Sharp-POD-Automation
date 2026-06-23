@@ -54,6 +54,7 @@ function AppRoutes() {
         {/* Protected */}
         <Route path="/dashboard"   element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
         <Route path="/pipeline"    element={<ProtectedRoute><Pipeline /></ProtectedRoute>} />
+        <Route path="/pipeline/:runId" element={<ProtectedRoute><Pipeline /></ProtectedRoute>} />
         <Route path="/review"      element={<ProtectedRoute><ReviewQueue /></ProtectedRoute>} />
         <Route path="/review/:runId" element={<ProtectedRoute><ReviewQueue /></ProtectedRoute>} />
         <Route path="/image-gen"   element={<ProtectedRoute><ImageGen /></ProtectedRoute>} />

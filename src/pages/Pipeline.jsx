@@ -1,5 +1,5 @@
-import React, { useState, useRef, useCallback } from "react";
-import { useNavigate } from "react-router-dom";
+import React, { useState, useRef, useCallback, useEffect } from "react";
+import { useNavigate, useParams } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import api from "../lib/api";
 import { PLATFORMS, getProductsForPlatform } from "../data/productCatalogue";
@@ -39,6 +39,7 @@ function fmtSize(bytes) {
 export default function Pipeline() {
   const { user } = useAuth();
   const navigate = useNavigate();
+  const { runId: resumeRunId } = useParams();
   const fileRef = useRef(null);
 
   const [step, setStep] = useState(1); // 1=platform, 2=upload, 3=settings, 4=running
@@ -48,6 +49,34 @@ export default function Pipeline() {
   const [priceTier, setPriceTier] = useState("mid");
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState({ step: "", pct: 0 });
+  const [runId, setRunId] = useState(null);
+  const [total, setTotal] = useState(0);
+  const [completed, setCompleted] = useState([]);
+  const [lastPreview, setLastPreview] = useState(null);
+  const [awaitingContinue, setAwaitingContinue] = useState(false);
+  const [resuming, setResuming] = useState(!!resumeRunId);
+
+  // ── Resume an existing in_progress run (save point) ─────────────────────────
+  useEffect(() => {
+    if (!resumeRunId) return;
+    (async () => {
+      try {
+        const { data } = await api.get(`/pipeline/runs/${resumeRunId}`);
+        setRunId(data.id);
+        setTotal(data.total_count);
+        setCompleted(data.results || []);
+        setStep(4);
+        setRunning(true);
+        setResuming(false);
+        processNext(data.id, data.total_count, (data.results || []).length);
+      } catch (err) {
+        toast.error("Could not load that run to resume");
+        setResuming(false);
+        navigate("/dashboard");
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resumeRunId]);
 
   const tier = user?.tier || "free";
   const tierLimits = { free: 1, creator: 10, pro: 25, agency: 40, owner: 999 };
@@ -78,15 +107,50 @@ export default function Pipeline() {
 
   const removeImage = (id) => setImages(prev => prev.filter(i => i.id !== id));
 
-  // ── Run pipeline ───────────────────────────────────────────────────────────
+  // ── Process one image, show its preview, then wait for the user before the
+  //    next one runs ("save point" — the run is durable in the DB after every
+  //    single image, so pausing here and coming back later picks up exactly
+  //    where it left off). ─────────────────────────────────────────────────────
+  const processNext = async (rid, runTotal, alreadyDone) => {
+    setProgress({ step: `Processing image ${alreadyDone + 1} of ${runTotal}...`, pct: Math.round((alreadyDone / runTotal) * 100) });
+    try {
+      const { data } = await api.post(`/pipeline/runs/${rid}/process-next`);
+      if (data.result) {
+        setCompleted(prev => [...prev, data.result]);
+        setLastPreview(data.result);
+      }
+      if (data.done) {
+        setProgress({ step: "All images processed! Redirecting to review...", pct: 100 });
+        toast.success(`Pipeline complete — ${data.processed} listing${data.processed !== 1 ? "s" : ""} ready for review`);
+        setTimeout(() => navigate(`/review/${rid}`), 800);
+        return;
+      }
+      setAwaitingContinue(true);
+      setProgress({ step: `Image ${data.processed} of ${data.total} ready — review the preview`, pct: Math.round((data.processed / data.total) * 100) });
+    } catch (err) {
+      toast.error(err.response?.data?.detail || err.message);
+      setRunning(false);
+    }
+  };
+
+  const continueToNext = () => {
+    setAwaitingContinue(false);
+    processNext(runId, total, completed.length);
+  };
+
+  const pauseRun = () => {
+    toast.message("Run paused — it's saved. Resume anytime from your Dashboard.");
+    navigate("/dashboard");
+  };
+
+  // ── Kick off a brand new run ────────────────────────────────────────────────
   const runPipeline = async () => {
     if (!selectedPlatform || images.length === 0) return;
     setRunning(true);
     setStep(4);
 
     try {
-      setProgress({ step: "Submitting to pipeline...", pct: 10 });
-
+      setProgress({ step: "Creating pipeline run...", pct: 2 });
       const payload = {
         platform: selectedPlatform,
         market,
@@ -98,17 +162,11 @@ export default function Pipeline() {
         })),
       };
 
-      setProgress({ step: "Upscaling images with Real-ESRGAN AI...", pct: 25 });
       const { data } = await api.post("/pipeline/run", payload);
-      setProgress({ step: "Analysing artwork with Claude Vision...", pct: 60 });
-
-      await new Promise(r => setTimeout(r, 500));
-      setProgress({ step: "Building review queue...", pct: 90 });
-      await new Promise(r => setTimeout(r, 300));
-      setProgress({ step: "Done! Redirecting to review...", pct: 100 });
-
-      toast.success(`Pipeline complete — ${data.total - (data.failed || 0)} listings ready for review`);
-      setTimeout(() => navigate(`/review/${data.run_id}`), 800);
+      setRunId(data.run_id);
+      setTotal(data.total);
+      setCompleted([]);
+      processNext(data.run_id, data.total, 0);
 
     } catch (err) {
       toast.error(err.response?.data?.detail || err.message);
@@ -349,23 +407,64 @@ export default function Pipeline() {
 
         {/* Step 4 — Running */}
         {step === 4 && (
-          <div className="fade-up text-center py-20">
-            <div className="relative w-24 h-24 mx-auto mb-8">
-              <div className="absolute inset-0 rounded-full bg-[var(--raven)]/20 blur-2xl animate-pulse" />
-              <img src="/brands/ravenSharpLogo.png" alt="Raven Sharp"
-                className="relative w-24 h-24 object-contain animate-spin" style={{ animationDuration: "8s" }} />
-            </div>
-            <h2 className="font-display text-3xl font-bold mb-3">Pipeline Running</h2>
-            <p className="text-[var(--muted)] mb-8">{progress.step}</p>
-            <div className="max-w-md mx-auto">
-              <div className="h-2 bg-white/10 rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-gradient-to-r from-[var(--raven)] to-[var(--raven-glow)] rounded-full transition-all duration-500"
-                  style={{ width: `${progress.pct}%` }}
-                />
-              </div>
-              <p className="text-xs text-[var(--subtle)] mt-2">{progress.pct}%</p>
-            </div>
+          <div className="fade-up text-center py-16">
+            {resuming ? (
+              <p className="text-[var(--muted)]">Loading saved run...</p>
+            ) : (
+              <>
+                <div className="relative w-20 h-20 mx-auto mb-6">
+                  <div className="absolute inset-0 rounded-full bg-[var(--raven)]/20 blur-2xl animate-pulse" />
+                  <img src="/brands/ravenSharpLogo.png" alt="Raven Sharp"
+                    className={`relative w-20 h-20 object-contain ${awaitingContinue ? "" : "animate-spin"}`}
+                    style={{ animationDuration: "8s" }} />
+                </div>
+                <h2 className="font-display text-2xl sm:text-3xl font-bold mb-2">
+                  {awaitingContinue ? "Image ready — preview before continuing" : "Pipeline Running"}
+                </h2>
+                <p className="text-[var(--muted)] mb-6">{progress.step}</p>
+
+                <div className="max-w-md mx-auto mb-8">
+                  <div className="h-2 bg-white/10 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-gradient-to-r from-[var(--raven)] to-[var(--raven-glow)] rounded-full transition-all duration-500"
+                      style={{ width: `${progress.pct}%` }}
+                    />
+                  </div>
+                  <p className="text-xs text-[var(--subtle)] mt-2">{completed.length} / {total} processed — {progress.pct}%</p>
+                </div>
+
+                {/* Preview of the most recently completed image before moving on */}
+                {lastPreview && (
+                  <div className="max-w-sm mx-auto glass rounded-2xl p-5 mb-8">
+                    {lastPreview.public_url ? (
+                      <img src={lastPreview.public_url} alt={lastPreview.name}
+                        className="w-full rounded-xl mb-4 object-cover aspect-square" />
+                    ) : (
+                      <div className="w-full rounded-xl mb-4 aspect-square bg-white/5 flex items-center justify-center text-xs text-red-400">
+                        Failed: {lastPreview.error}
+                      </div>
+                    )}
+                    <p className="text-sm font-medium truncate">{lastPreview.name}</p>
+                    {lastPreview.analysis?.title && (
+                      <p className="text-xs text-[var(--muted)] mt-1 line-clamp-2">{lastPreview.analysis.title}</p>
+                    )}
+                  </div>
+                )}
+
+                {awaitingContinue && (
+                  <div className="flex items-center justify-center gap-3">
+                    <button onClick={pauseRun}
+                      className="px-5 py-2.5 rounded-xl text-sm font-semibold border border-white/15 text-[var(--muted)] hover:text-[var(--text)] hover:border-white/30 transition-all">
+                      Save &amp; Continue Later
+                    </button>
+                    <button onClick={continueToNext}
+                      className="flex items-center gap-2 px-6 py-2.5 bg-[var(--raven)] hover:bg-[var(--raven-glow)] text-white rounded-xl text-sm font-semibold transition-all">
+                      Looks good — Continue <ChevronRight className="w-4 h-4" />
+                    </button>
+                  </div>
+                )}
+              </>
+            )}
           </div>
         )}
       </div>

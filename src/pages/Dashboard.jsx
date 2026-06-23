@@ -140,7 +140,8 @@ export default function Dashboard() {
           ) : (
             <div className="divide-y divide-white/5">
               {runs.slice(0, 10).map(run => (
-                <Link key={run.id} to={`/review/${run.id}`}
+                <Link key={run.id}
+                  to={run.status === "in_progress" ? `/pipeline/${run.id}` : `/review/${run.id}`}
                   className="flex items-center gap-4 px-6 py-4 hover:bg-white/3 transition-colors group">
                   <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${
                     run.status === "completed" ? "bg-emerald-500/15 text-emerald-400"
@@ -158,9 +159,12 @@ export default function Dashboard() {
                   <div className="flex items-center gap-2">
                     <span className={`text-xs px-2 py-1 rounded-full ${
                       run.status === "completed" ? "bg-emerald-500/10 text-emerald-400"
+                        : run.status === "in_progress" ? "bg-sky-500/10 text-sky-400"
                         : "bg-amber-500/10 text-amber-400"
                     }`}>
-                      {run.status === "completed" ? "Published" : "Review"}
+                      {run.status === "completed" ? "Published"
+                        : run.status === "in_progress" ? `Resume · ${(run.results || []).length}/${run.total_count}`
+                        : "Review"}
                     </span>
                     <ChevronRight className="w-4 h-4 text-[var(--subtle)] group-hover:text-[var(--muted)] transition-colors" />
                   </div>

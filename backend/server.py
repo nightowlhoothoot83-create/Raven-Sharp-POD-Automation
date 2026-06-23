@@ -565,11 +565,13 @@ Tags: max 13 for Etsy, max 15 for Redbubble, unlimited for others."""
 
 @api.post("/pipeline/run")
 async def run_pipeline(payload: PipelineRunIn, user: dict = Depends(get_user)):
-    """Full pipeline: upscale → analyse → match products → write copy → build review queue"""
+    """Create a pipeline run as a save point. Images are processed one at a time
+    via /pipeline/runs/{run_id}/process-next so progress is never lost — closing
+    the tab or losing connection mid-run just leaves the run 'in_progress' with
+    its already-processed results intact, ready to resume."""
     tier = user.get("tier", "free")
     limits = TIERS.get(tier, TIERS["free"])
 
-    # Check limits
     if tier != "owner":
         runs_used = user.get("pipeline_runs_used", 0)
         if runs_used >= limits["pipeline_runs"]:
@@ -579,69 +581,87 @@ async def run_pipeline(payload: PipelineRunIn, user: dict = Depends(get_user)):
             raise HTTPException(403, f"Batch size exceeds your tier limit of {max_images} images")
 
     run_id = str(uuid.uuid4())
-    results = []
+    queue = [{"name": img.get("name", "artwork"),
+              "base64": img["base64"],
+              "mime": img.get("mime", "image/jpeg")} for img in payload.images]
 
-    for img_data in payload.images:
-        try:
-            image_b64 = img_data["base64"]
-            mime      = img_data.get("mime", "image/jpeg")
-            name      = img_data.get("name", "artwork")
-
-            # Step 1: True AI upscaling
-            log.info(f"Upscaling {name}...")
-            upscaled_b64 = await true_upscale(image_b64, mime, scale=4)
-
-            # Step 2: Upload to Cloudflare R2 for public URL
-            log.info(f"Uploading {name} to R2...")
-            public_url = await upload_to_r2(upscaled_b64, f"{uuid.uuid4()}-{name}.png")
-
-            # Step 3: Claude Vision analysis
-            log.info(f"Analysing {name} with Claude Vision...")
-            analysis = await analyse_with_claude(
-                upscaled_b64, mime, payload.platform,
-                payload.market, payload.price_tier)
-
-            results.append({
-                "id": str(uuid.uuid4()),
-                "name": name,
-                "public_url": public_url,
-                "upscaled_b64": upscaled_b64[:100] + "...",  # truncate for storage
-                "analysis": analysis,
-                "status": "pending_review",
-                "platform": payload.platform,
-                "edited": False
-            })
-
-        except Exception as e:
-            log.error(f"Pipeline error for {img_data.get('name')}: {e}")
-            results.append({
-                "id": str(uuid.uuid4()),
-                "name": img_data.get("name", "unknown"),
-                "error": str(e),
-                "status": "failed"
-            })
-
-    # Save run
     run = {"id": run_id, "user_id": user["id"],
            "platform": payload.platform,
-           "results": results,
-           "status": "pending_review",
+           "market": payload.market,
+           "price_tier": payload.price_tier,
+           "queue": queue,
+           "results": [],
+           "status": "in_progress",
            "created_at": datetime.now(timezone.utc),
-           "approved_count": 0, "total_count": len(results)}
+           "approved_count": 0, "total_count": len(queue)}
     await db.pipeline_runs.insert_one(run)
 
-    # Increment usage
     await db.users.update_one({"id": user["id"]},
                                {"$inc": {"pipeline_runs_used": 1}})
 
-    return {"run_id": run_id, "results": results,
-            "total": len(results),
-            "failed": sum(1 for r in results if r.get("status") == "failed")}
+    return {"run_id": run_id, "total": len(queue), "status": "in_progress"}
+
+@api.post("/pipeline/runs/{run_id}/process-next")
+async def process_next_image(run_id: str, user: dict = Depends(get_user)):
+    """Process the next not-yet-processed image in the run's queue and save the
+    result immediately. Call this repeatedly from the frontend (one call per
+    image) so each completed image's preview can be shown before continuing,
+    and so the run can be paused/resumed at any point between images."""
+    run = await db.pipeline_runs.find_one({"id": run_id, "user_id": user["id"]})
+    if not run: raise HTTPException(404, "Run not found")
+
+    processed = len(run.get("results", []))
+    queue = run.get("queue", [])
+    if processed >= len(queue):
+        if run["status"] != "pending_review":
+            await db.pipeline_runs.update_one({"id": run_id}, {"$set": {"status": "pending_review"}})
+        return {"done": True, "run_id": run_id, "total": len(queue), "processed": processed}
+
+    img_data = queue[processed]
+    name = img_data["name"]
+
+    try:
+        image_b64 = img_data["base64"]
+        mime      = img_data["mime"]
+
+        log.info(f"Upscaling {name}...")
+        upscaled_b64 = await true_upscale(image_b64, mime, scale=4)
+
+        log.info(f"Uploading {name} to R2...")
+        public_url = await upload_to_r2(upscaled_b64, f"{uuid.uuid4()}-{name}.png")
+
+        log.info(f"Analysing {name} with Claude Vision...")
+        analysis = await analyse_with_claude(
+            upscaled_b64, mime, run["platform"], run.get("market", "global"), run.get("price_tier", "mid"))
+
+        result = {
+            "id": str(uuid.uuid4()),
+            "name": name,
+            "public_url": public_url,
+            "upscaled_b64": upscaled_b64[:100] + "...",
+            "analysis": analysis,
+            "status": "pending_review",
+            "platform": run["platform"],
+            "edited": False
+        }
+    except Exception as e:
+        log.error(f"Pipeline error for {name}: {e}")
+        result = {"id": str(uuid.uuid4()), "name": name, "error": str(e), "status": "failed"}
+
+    new_processed = processed + 1
+    done = new_processed >= len(queue)
+    await db.pipeline_runs.update_one(
+        {"id": run_id},
+        {"$push": {"results": result},
+         "$set": {"status": "pending_review" if done else "in_progress"}})
+
+    return {"done": done, "run_id": run_id, "result": result,
+            "total": len(queue), "processed": new_processed}
 
 @api.get("/pipeline/runs")
 async def list_runs(user: dict = Depends(get_user)):
     cursor = db.pipeline_runs.find(
-        {"user_id": user["id"]}, {"_id": 0, "results.upscaled_b64": 0}
+        {"user_id": user["id"]}, {"_id": 0, "results.upscaled_b64": 0, "queue.base64": 0}
     ).sort("created_at", -1).limit(50)
     return [r async for r in cursor]
 
@@ -649,7 +669,7 @@ async def list_runs(user: dict = Depends(get_user)):
 async def get_run(run_id: str, user: dict = Depends(get_user)):
     run = await db.pipeline_runs.find_one(
         {"id": run_id, "user_id": user["id"]},
-        {"_id": 0, "results.upscaled_b64": 0})
+        {"_id": 0, "results.upscaled_b64": 0, "queue.base64": 0})
     if not run: raise HTTPException(404, "Run not found")
     return run
 
