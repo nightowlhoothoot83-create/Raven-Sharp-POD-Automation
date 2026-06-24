@@ -1,10 +1,10 @@
 import React, { useState, useRef, useCallback, useEffect } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, Link } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import api from "../lib/api";
 import { PLATFORMS, getProductsForPlatform } from "../data/productCatalogue";
 import ADGFooter from "../components/ADGFooter";
-import { Upload, X, Play, ChevronRight, Globe, Zap, AlertCircle } from "lucide-react";
+import { Upload, X, Play, ChevronRight, Globe, Zap, AlertCircle, CheckCircle2, Info, Clock, Lock } from "lucide-react";
 import { toast } from "sonner";
 
 const MARKETS = [
@@ -17,10 +17,22 @@ const MARKETS = [
 ];
 
 const PRICE_TIERS = [
-  { value: "budget",  label: "Budget" },
-  { value: "mid",     label: "Mid-Range" },
-  { value: "premium", label: "Premium" },
+  { value: "budget",  label: "Budget",    range: "~$12–25",  desc: "Best for volume sellers & entry-level buyers" },
+  { value: "mid",     label: "Mid-Range", range: "~$22–55",  desc: "Sweet spot for most POD products" },
+  { value: "premium", label: "Premium",   range: "~$38–95",  desc: "Higher margins, curated feel" },
 ];
+
+const PLATFORM_NOTES = {
+  gelato:    { desc: "Global print network. Ships direct to customers in 30+ countries.", type: "API" },
+  printify:  { desc: "Wide product catalogue, multiple print providers to choose from.", type: "API" },
+  printful:  { desc: "Premium quality fulfillment with warehousing options.", type: "API" },
+  prodigi:   { desc: "UK-based global fulfillment, great for European markets.", type: "API" },
+  etsy:      { desc: "Marketplace with built-in traffic. Connects via OAuth.", type: "OAuth" },
+  shopify:   { desc: "Your own store. Full control over branding and pricing.", type: "API" },
+  redbubble: { desc: "Artist marketplace. Outputs a CSV file you upload yourself.", type: "CSV" },
+  teepublic: { desc: "Design-focused marketplace with a loyal buyer base.", type: "CSV" },
+  merch:     { desc: "Amazon's POD program. High reach, requires approval.", type: "CSV" },
+};
 
 function fileToBase64(file) {
   return new Promise((res, rej) => {
@@ -55,8 +67,18 @@ export default function Pipeline() {
   const [lastPreview, setLastPreview] = useState(null);
   const [awaitingContinue, setAwaitingContinue] = useState(false);
   const [resuming, setResuming] = useState(!!resumeRunId);
+  const [connectedPlatforms, setConnectedPlatforms] = useState([]);
+  const [platformsLoading, setPlatformsLoading] = useState(true);
 
-  // ── Resume an existing in_progress run (save point) ─────────────────────────
+  // ── Fetch connected platforms on mount ────────────────────────────────────
+  useEffect(() => {
+    api.get("/account/platforms")
+      .then(({ data }) => setConnectedPlatforms(data.connected || []))
+      .catch(() => {})
+      .finally(() => setPlatformsLoading(false));
+  }, []);
+
+  // ── Resume an existing in_progress run (save point) ──────────────────────
   useEffect(() => {
     if (!resumeRunId) return;
     (async () => {
@@ -84,9 +106,12 @@ export default function Pipeline() {
 
   // ── File handling ──────────────────────────────────────────────────────────
   const onFiles = useCallback(async (files) => {
-    const valid = Array.from(files)
-      .filter(f => f.type.startsWith("image/"))
-      .slice(0, maxImages - images.length);
+    const allImages = Array.from(files).filter(f => f.type.startsWith("image/"));
+    const valid = allImages.slice(0, maxImages - images.length);
+
+    if (valid.length < allImages.length) {
+      toast.info(`Only ${maxImages} image${maxImages !== 1 ? "s" : ""} allowed on your ${tier} plan`);
+    }
 
     const loaded = await Promise.all(valid.map(async f => ({
       id: Math.random().toString(36).slice(2),
@@ -98,7 +123,7 @@ export default function Pipeline() {
       mime: f.type,
     })));
     setImages(prev => [...prev, ...loaded].slice(0, maxImages));
-  }, [images.length, maxImages]);
+  }, [images.length, maxImages, tier]);
 
   const onDrop = useCallback((e) => {
     e.preventDefault();
@@ -107,10 +132,7 @@ export default function Pipeline() {
 
   const removeImage = (id) => setImages(prev => prev.filter(i => i.id !== id));
 
-  // ── Process one image, show its preview, then wait for the user before the
-  //    next one runs ("save point" — the run is durable in the DB after every
-  //    single image, so pausing here and coming back later picks up exactly
-  //    where it left off). ─────────────────────────────────────────────────────
+  // ── Process one image at a time with save-point after each ────────────────
   const processNext = async (rid, runTotal, alreadyDone) => {
     setProgress({ step: `Processing image ${alreadyDone + 1} of ${runTotal}...`, pct: Math.round((alreadyDone / runTotal) * 100) });
     try {
@@ -143,7 +165,7 @@ export default function Pipeline() {
     navigate("/dashboard");
   };
 
-  // ── Kick off a brand new run ────────────────────────────────────────────────
+  // ── Kick off a brand new run ───────────────────────────────────────────────
   const runPipeline = async () => {
     if (!selectedPlatform || images.length === 0) return;
     setRunning(true);
@@ -176,6 +198,8 @@ export default function Pipeline() {
   };
 
   const platformProducts = selectedPlatform ? getProductsForPlatform(selectedPlatform) : [];
+  const isConnected = (id) => connectedPlatforms.includes(id);
+  const needsSetup = (id) => PLATFORMS[id]?.api && !isConnected(id);
 
   return (
     <div className="min-h-screen pt-20 pb-16">
@@ -188,7 +212,7 @@ export default function Pipeline() {
             New Pipeline Run
           </h1>
           <p className="text-[var(--muted)] mt-2">
-            Select a platform, upload your artwork, and let Raven Sharp do the rest.
+            Select a platform, upload your artwork, configure your settings — Raven Sharp handles the rest.
           </p>
         </div>
 
@@ -212,43 +236,101 @@ export default function Pipeline() {
           ))}
         </div>
 
-        {/* Step 1 — Platform selection */}
+        {/* ── Step 1 — Platform selection ─────────────────────────────────────── */}
         {step === 1 && (
           <div className="fade-up">
-            <h2 className="font-display text-2xl font-bold mb-2">Choose your platform</h2>
-            <p className="text-sm text-[var(--muted)] mb-8">
+            <h2 className="font-display text-2xl font-bold mb-1">Choose your platform</h2>
+            <p className="text-sm text-[var(--muted)] mb-4">
               Select one platform per run. Products, copy format and output method are all optimised for your choice.
             </p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-              {Object.entries(PLATFORMS).map(([id, plat]) => (
-                <button
-                  key={id}
-                  onClick={() => { setSelectedPlatform(id); setStep(2); }}
-                  className="glass rounded-2xl p-6 text-left hover:border-[var(--raven)]/40 transition-all group"
-                >
-                  <div className="flex items-center justify-between mb-3">
-                    <span className="font-display text-lg font-bold">{plat.name}</span>
-                    <span className={`text-[10px] font-mono uppercase tracking-widest px-2 py-1 rounded border ${
-                      plat.api
-                        ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-400"
-                        : "border-amber-500/30 bg-amber-500/10 text-amber-400"
-                    }`}>
-                      {plat.badge}
-                    </span>
-                  </div>
-                  <p className="text-xs text-[var(--muted)]">
-                    {getProductsForPlatform(id).length} products available
-                  </p>
-                  <div className="mt-4 flex items-center gap-1 text-xs text-[var(--raven-glow)] opacity-0 group-hover:opacity-100 transition-opacity">
-                    Select <ChevronRight className="w-3.5 h-3.5" />
-                  </div>
-                </button>
-              ))}
+
+            {/* Legend */}
+            <div className="flex flex-wrap gap-3 mb-6 text-xs">
+              <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">
+                <CheckCircle2 className="w-3.5 h-3.5" />
+                API / OAuth — publishes directly to your store
+              </div>
+              <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-400">
+                <Info className="w-3.5 h-3.5" />
+                CSV — downloads a file you upload yourself
+              </div>
             </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {Object.entries(PLATFORMS).map(([id, plat]) => {
+                const connected = isConnected(id);
+                const setupNeeded = needsSetup(id);
+                const note = PLATFORM_NOTES[id];
+                return (
+                  <button
+                    key={id}
+                    onClick={() => { setSelectedPlatform(id); setStep(2); }}
+                    className="glass rounded-2xl p-5 text-left hover:border-[var(--raven)]/40 transition-all group"
+                  >
+                    <div className="flex items-start justify-between gap-2 mb-2">
+                      <span className="font-display text-base font-bold leading-tight">{plat.name}</span>
+                      <span className={`shrink-0 text-[10px] font-mono uppercase tracking-widest px-2 py-0.5 rounded border mt-0.5 ${
+                        plat.api
+                          ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-400"
+                          : "border-amber-500/30 bg-amber-500/10 text-amber-400"
+                      }`}>
+                        {note?.type || plat.badge}
+                      </span>
+                    </div>
+
+                    {note?.desc && (
+                      <p className="text-xs text-[var(--muted)] mb-3 leading-relaxed">{note.desc}</p>
+                    )}
+
+                    {!platformsLoading && (
+                      <div className={`flex items-center gap-1.5 text-[11px] font-medium mb-2 ${
+                        connected ? "text-emerald-400"
+                          : plat.api ? "text-amber-400"
+                          : "text-[var(--subtle)]"
+                      }`}>
+                        {connected ? (
+                          <><CheckCircle2 className="w-3.5 h-3.5" /> Connected</>
+                        ) : plat.api ? (
+                          <><AlertCircle className="w-3.5 h-3.5" /> Needs setup</>
+                        ) : (
+                          <><Info className="w-3.5 h-3.5" /> No connection needed</>
+                        )}
+                      </div>
+                    )}
+
+                    <p className="text-[11px] text-[var(--subtle)]">
+                      {getProductsForPlatform(id).length} products available
+                    </p>
+
+                    {setupNeeded && !platformsLoading && (
+                      <p className="text-[10px] text-amber-400/70 mt-2">
+                        Add your API key in <span className="underline">Account → Platforms</span> to publish directly
+                      </p>
+                    )}
+
+                    <div className="mt-3 flex items-center gap-1 text-xs text-[var(--raven-glow)] opacity-0 group-hover:opacity-100 transition-opacity">
+                      Select <ChevronRight className="w-3.5 h-3.5" />
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+
+            {!platformsLoading && connectedPlatforms.length === 0 && (
+              <div className="mt-6 flex items-start gap-3 px-4 py-3 rounded-xl bg-amber-500/10 border border-amber-500/20 text-sm text-amber-300">
+                <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                <div>
+                  <span className="font-semibold">No platforms connected yet.</span> CSV platforms (Redbubble, TeePublic, Merch by Amazon) work without any connection. API platforms need a key.{" "}
+                  <Link to="/account" className="underline text-amber-200 hover:text-white transition-colors">
+                    Connect platforms →
+                  </Link>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
-        {/* Step 2 — Upload artwork */}
+        {/* ── Step 2 — Upload artwork ─────────────────────────────────────────── */}
         {step === 2 && (
           <div className="fade-up">
             <div className="flex items-center justify-between mb-2">
@@ -257,15 +339,60 @@ export default function Pipeline() {
                 ← Change platform
               </button>
             </div>
-            <p className="text-sm text-[var(--muted)] mb-2">
+            <p className="text-sm text-[var(--muted)] mb-5">
               Platform: <span className="text-[var(--raven-glow)] font-semibold">{PLATFORMS[selectedPlatform]?.name}</span>
-              {" · "}{platformProducts.length} products available
+              {" · "}{platformProducts.length} products will be matched
             </p>
 
+            {/* What the pipeline does */}
+            <div className="glass rounded-2xl p-5 mb-5 border-l-2 border-[var(--raven)]/40">
+              <div className="flex items-center gap-2 text-sm font-semibold mb-3">
+                <Zap className="w-4 h-4 text-[var(--raven-glow)]" />
+                What happens to your artwork
+              </div>
+              <div className="grid sm:grid-cols-4 gap-3 text-xs text-[var(--muted)]">
+                {[
+                  { n: "1", label: "AI Upscale", desc: "Real-ESRGAN upscales to print-quality resolution" },
+                  { n: "2", label: "DPI Inject", desc: "Sets 300 DPI metadata for clean print output" },
+                  { n: "3", label: "Vision Analysis", desc: "Claude reads your art: colours, style, themes" },
+                  { n: "4", label: "SEO Copy", desc: "Titles, descriptions & tags written per platform" },
+                ].map(s => (
+                  <div key={s.n} className="flex gap-2">
+                    <span className="w-5 h-5 rounded-full bg-[var(--raven)]/20 text-[var(--raven-glow)] text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">{s.n}</span>
+                    <div>
+                      <div className="font-semibold text-[var(--text)]">{s.label}</div>
+                      <div>{s.desc}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Image tips */}
+            <div className="flex flex-wrap gap-3 mb-5 text-xs text-[var(--muted)]">
+              <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white/5 border border-white/10">
+                <CheckCircle2 className="w-3 h-3 text-emerald-400" /> Any resolution — AI handles upscaling
+              </span>
+              <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white/5 border border-white/10">
+                <CheckCircle2 className="w-3 h-3 text-emerald-400" /> Square or portrait both fine
+              </span>
+              <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white/5 border border-white/10">
+                <CheckCircle2 className="w-3 h-3 text-emerald-400" /> PNG, JPEG, or WebP
+              </span>
+              <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white/5 border border-white/10">
+                <Info className="w-3 h-3 text-amber-400" /> Higher source res = better final quality
+              </span>
+            </div>
+
+            {/* Plan limit */}
             {tier !== "owner" && (
-              <div className="flex items-center gap-2 text-xs text-[var(--muted)] mb-6 px-3 py-2 rounded-lg bg-white/5 border border-white/8 w-fit">
-                <AlertCircle className="w-3.5 h-3.5 text-[var(--gold)]" />
-                Your {tier} tier allows {maxImages} image{maxImages !== 1 ? "s" : ""} per run
+              <div className="flex items-center gap-2 text-xs text-[var(--muted)] mb-5 px-3 py-2 rounded-lg bg-white/5 border border-white/8 w-fit">
+                <Lock className="w-3.5 h-3.5 text-[var(--gold)]" />
+                Your <span className="capitalize font-semibold mx-0.5">{tier}</span> plan allows{" "}
+                <span className="font-semibold mx-0.5">{maxImages}</span> image{maxImages !== 1 ? "s" : ""} per run
+                {tier !== "agency" && (
+                  <Link to="/pricing" className="ml-2 text-[var(--raven-glow)] underline hover:no-underline">Upgrade</Link>
+                )}
               </div>
             )}
 
@@ -285,29 +412,41 @@ export default function Pipeline() {
                 onChange={e => onFiles(e.target.files)}
               />
               <Upload className="w-10 h-10 text-[var(--raven-glow)] mx-auto mb-4 group-hover:scale-110 transition-transform" />
-              <p className="font-display text-xl font-bold mb-2">Drop artwork here</p>
+              <p className="font-display text-xl font-bold mb-2">Drop artwork here or click to browse</p>
               <p className="text-sm text-[var(--muted)]">
-                PNG, JPEG, WebP · Up to {maxImages} image{maxImages !== 1 ? "s" : ""} · Any size (will be AI upscaled)
+                Up to {maxImages} image{maxImages !== 1 ? "s" : ""} · PNG, JPEG, WebP · Any size
               </p>
             </div>
 
             {/* Image grid */}
             {images.length > 0 && (
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4 mb-8">
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4 mb-6">
                 {images.map(img => (
                   <div key={img.id} className="relative group rounded-xl overflow-hidden aspect-square bg-[var(--surface-2)]">
                     <img src={img.preview} alt={img.name} className="w-full h-full object-cover" />
                     <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-end p-2">
-                      <span className="text-[10px] text-white/80 truncate">{img.name}</span>
+                      <div>
+                        <span className="text-[10px] text-white/80 truncate block">{img.name}</span>
+                        <span className="text-[10px] text-white/50">{fmtSize(img.size)}</span>
+                      </div>
                     </div>
                     <button
-                      onClick={() => removeImage(img.id)}
+                      onClick={(e) => { e.stopPropagation(); removeImage(img.id); }}
                       className="absolute top-2 right-2 w-6 h-6 rounded-full bg-red-500/80 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-500"
                     >
                       <X className="w-3.5 h-3.5" />
                     </button>
                   </div>
                 ))}
+                {images.length < maxImages && (
+                  <button
+                    onClick={() => fileRef.current?.click()}
+                    className="rounded-xl aspect-square border-2 border-dashed border-white/10 hover:border-[var(--raven)]/40 flex flex-col items-center justify-center gap-2 text-[var(--subtle)] hover:text-[var(--muted)] transition-all"
+                  >
+                    <Upload className="w-5 h-5" />
+                    <span className="text-[10px]">Add more</span>
+                  </button>
+                )}
               </div>
             )}
 
@@ -320,26 +459,33 @@ export default function Pipeline() {
                   onClick={() => setStep(3)}
                   className="flex items-center gap-2 px-6 py-2.5 bg-[var(--raven)] hover:bg-[var(--raven-glow)] text-white rounded-xl text-sm font-semibold transition-all"
                 >
-                  Continue <ChevronRight className="w-4 h-4" />
+                  Continue to settings <ChevronRight className="w-4 h-4" />
                 </button>
               </div>
             )}
           </div>
         )}
 
-        {/* Step 3 — Settings */}
+        {/* ── Step 3 — Settings ───────────────────────────────────────────────── */}
         {step === 3 && (
           <div className="fade-up">
-            <div className="flex items-center justify-between mb-6">
+            <div className="flex items-center justify-between mb-2">
               <h2 className="font-display text-2xl font-bold">Run settings</h2>
               <button onClick={() => setStep(2)} className="text-xs text-[var(--muted)] hover:text-[var(--text)] transition-colors">← Back</button>
             </div>
+            <p className="text-sm text-[var(--muted)] mb-7">
+              These settings shape the AI-generated copy. You can still edit everything in the review queue before anything goes live.
+            </p>
 
-            <div className="grid sm:grid-cols-2 gap-6 mb-8">
+            <div className="grid sm:grid-cols-2 gap-6 mb-6">
+              {/* Market */}
               <div className="glass rounded-2xl p-6">
-                <label className="text-xs font-mono uppercase tracking-widest text-[var(--muted)] block mb-3">
+                <label className="text-xs font-mono uppercase tracking-widest text-[var(--muted)] block mb-1">
                   <Globe className="w-3.5 h-3.5 inline mr-1.5" />Target Market
                 </label>
+                <p className="text-xs text-[var(--subtle)] mb-4">
+                  Influences currency, product selection and listing copy tone — e.g. Australian vs US spelling, local holiday relevance.
+                </p>
                 <div className="flex flex-wrap gap-2">
                   {MARKETS.map(m => (
                     <button key={m.value} onClick={() => setMarket(m.value)}
@@ -354,34 +500,44 @@ export default function Pipeline() {
                 </div>
               </div>
 
+              {/* Price Tier */}
               <div className="glass rounded-2xl p-6">
-                <label className="text-xs font-mono uppercase tracking-widest text-[var(--muted)] block mb-3">
+                <label className="text-xs font-mono uppercase tracking-widest text-[var(--muted)] block mb-1">
                   <Zap className="w-3.5 h-3.5 inline mr-1.5" />Price Tier
                 </label>
-                <div className="flex flex-wrap gap-2">
+                <p className="text-xs text-[var(--subtle)] mb-4">
+                  Sets the suggested retail price range in your listing copy. Adjust per product in the review queue.
+                </p>
+                <div className="flex flex-col gap-2">
                   {PRICE_TIERS.map(t => (
                     <button key={t.value} onClick={() => setPriceTier(t.value)}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                      className={`flex items-center justify-between px-3 py-2.5 rounded-lg text-xs font-medium transition-all text-left ${
                         priceTier === t.value
                           ? "bg-[var(--raven)]/30 text-[var(--raven-glow)] border border-[var(--raven)]/40"
                           : "bg-white/5 text-[var(--muted)] border border-white/10 hover:bg-white/10"
                       }`}>
-                      {t.label}
+                      <span className="font-semibold">{t.label}</span>
+                      <span className={`font-mono ${priceTier === t.value ? "text-[var(--raven-glow)]/70" : "text-[var(--subtle)]"}`}>{t.range}</span>
                     </button>
                   ))}
+                  {priceTier && (
+                    <p className="text-[11px] text-[var(--subtle)] mt-1 px-1">
+                      {PRICE_TIERS.find(t => t.value === priceTier)?.desc}
+                    </p>
+                  )}
                 </div>
               </div>
             </div>
 
             {/* Run summary */}
-            <div className="glass rounded-2xl p-6 mb-8">
-              <h3 className="font-display text-lg font-bold mb-4">Run Summary</h3>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
+            <div className="glass rounded-2xl p-6 mb-6">
+              <h3 className="font-display text-base font-bold mb-4">Run Summary</h3>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm mb-4">
                 {[
-                  { label: "Platform",    value: PLATFORMS[selectedPlatform]?.name },
-                  { label: "Images",      value: `${images.length}` },
-                  { label: "Market",      value: MARKETS.find(m => m.value === market)?.label },
-                  { label: "Price tier",  value: PRICE_TIERS.find(t => t.value === priceTier)?.label },
+                  { label: "Platform",   value: PLATFORMS[selectedPlatform]?.name },
+                  { label: "Images",     value: `${images.length}` },
+                  { label: "Market",     value: MARKETS.find(m => m.value === market)?.label },
+                  { label: "Price tier", value: PRICE_TIERS.find(t => t.value === priceTier)?.label },
                 ].map(item => (
                   <div key={item.label} className="text-center p-3 rounded-xl bg-white/5">
                     <div className="text-xs text-[var(--muted)] mb-1">{item.label}</div>
@@ -389,9 +545,22 @@ export default function Pipeline() {
                   </div>
                 ))}
               </div>
-              <p className="text-xs text-[var(--subtle)] mt-4">
-                Pipeline will: AI upscale each image → Claude Vision analyse → match {platformProducts.length} available products → generate SEO copy → build review queue
-              </p>
+
+              <div className="rounded-xl bg-[var(--raven)]/10 border border-[var(--raven)]/20 p-4 text-xs text-[var(--muted)]">
+                <div className="font-semibold text-[var(--text)] mb-2 flex items-center gap-1.5">
+                  <Info className="w-3.5 h-3.5 text-[var(--raven-glow)]" />
+                  What happens when you hit Run
+                </div>
+                <ol className="space-y-1 list-decimal list-inside">
+                  <li>Each image is AI-upscaled and DPI-corrected for print</li>
+                  <li>Claude Vision analyses your artwork for themes, colours and style</li>
+                  <li>Platform-specific listings are generated — titles, descriptions, tags and {platformProducts.length} product variants</li>
+                  <li>Everything lands in your <strong className="text-[var(--text)]">review queue</strong> — nothing is published until you approve it</li>
+                </ol>
+                <p className="mt-3 text-[var(--subtle)]">
+                  Images are processed one at a time. You'll see a preview of each result before continuing to the next.
+                </p>
+              </div>
             </div>
 
             <button
@@ -405,68 +574,86 @@ export default function Pipeline() {
           </div>
         )}
 
-        {/* Step 4 — Running */}
+        {/* ── Step 4 — Running ────────────────────────────────────────────────── */}
         {step === 4 && (
-          <div className="fade-up text-center py-16">
-            {resuming ? (
-              <p className="text-[var(--muted)]">Loading saved run...</p>
-            ) : (
-              <>
-                <div className="relative w-20 h-20 mx-auto mb-6">
-                  <div className="absolute inset-0 rounded-full bg-[var(--raven)]/20 blur-2xl animate-pulse" />
-                  <img src="/brands/ravenSharpLogo.png" alt="Raven Sharp"
-                    className={`relative w-20 h-20 object-contain ${awaitingContinue ? "" : "animate-spin"}`}
-                    style={{ animationDuration: "8s" }} />
-                </div>
-                <h2 className="font-display text-2xl sm:text-3xl font-bold mb-2">
-                  {awaitingContinue ? "Image ready — preview before continuing" : "Pipeline Running"}
-                </h2>
-                <p className="text-[var(--muted)] mb-6">{progress.step}</p>
-
-                <div className="max-w-md mx-auto mb-8">
-                  <div className="h-2 bg-white/10 rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-gradient-to-r from-[var(--raven)] to-[var(--raven-glow)] rounded-full transition-all duration-500"
-                      style={{ width: `${progress.pct}%` }}
-                    />
-                  </div>
-                  <p className="text-xs text-[var(--subtle)] mt-2">{completed.length} / {total} processed — {progress.pct}%</p>
-                </div>
-
-                {/* Preview of the most recently completed image before moving on */}
-                {lastPreview && (
-                  <div className="max-w-sm mx-auto glass rounded-2xl p-5 mb-8">
-                    {lastPreview.public_url ? (
-                      <img src={lastPreview.public_url} alt={lastPreview.name}
-                        className="w-full rounded-xl mb-4 object-cover aspect-square" />
-                    ) : (
-                      <div className="w-full rounded-xl mb-4 aspect-square bg-white/5 flex items-center justify-center text-xs text-red-400">
-                        Failed: {lastPreview.error}
-                      </div>
-                    )}
-                    <p className="text-sm font-medium truncate">{lastPreview.name}</p>
-                    {lastPreview.analysis?.title && (
-                      <p className="text-xs text-[var(--muted)] mt-1 line-clamp-2">{lastPreview.analysis.title}</p>
-                    )}
-                  </div>
-                )}
-
-                {awaitingContinue && (
-                  <div className="flex items-center justify-center gap-3">
-                    <button onClick={pauseRun}
-                      className="px-5 py-2.5 rounded-xl text-sm font-semibold border border-white/15 text-[var(--muted)] hover:text-[var(--text)] hover:border-white/30 transition-all">
-                      Save &amp; Continue Later
-                    </button>
-                    <button onClick={continueToNext}
-                      className="flex items-center gap-2 px-6 py-2.5 bg-[var(--raven)] hover:bg-[var(--raven-glow)] text-white rounded-xl text-sm font-semibold transition-all">
-                      Looks good — Continue <ChevronRight className="w-4 h-4" />
-                    </button>
-                  </div>
-                )}
-              </>
+          <div className="fade-up">
+            {!awaitingContinue && !resuming && (
+              <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-300 text-sm font-medium mb-8">
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                Keep this tab open — or use Save &amp; Continue Later to pick up where you left off
+              </div>
             )}
+
+            <div className="text-center py-12">
+              {resuming ? (
+                <p className="text-[var(--muted)]">Loading saved run...</p>
+              ) : (
+                <>
+                  <div className="relative w-20 h-20 mx-auto mb-6">
+                    <div className="absolute inset-0 rounded-full bg-[var(--raven)]/20 blur-2xl animate-pulse" />
+                    <img src="/brands/ravenSharpLogo.png" alt="Raven Sharp"
+                      className={`relative w-20 h-20 object-contain ${awaitingContinue ? "" : "animate-spin"}`}
+                      style={{ animationDuration: "8s" }} />
+                  </div>
+
+                  <h2 className="font-display text-2xl sm:text-3xl font-bold mb-2">
+                    {awaitingContinue ? "Image ready — review before continuing" : "Pipeline Running"}
+                  </h2>
+                  <p className="text-[var(--muted)] mb-2">{progress.step}</p>
+
+                  {!awaitingContinue && (
+                    <p className="text-xs text-[var(--subtle)] mb-6 flex items-center justify-center gap-1.5">
+                      <Clock className="w-3.5 h-3.5" />
+                      Allow 1–3 minutes per image
+                    </p>
+                  )}
+
+                  <div className="max-w-md mx-auto mb-8">
+                    <div className="h-2 bg-white/10 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-gradient-to-r from-[var(--raven)] to-[var(--raven-glow)] rounded-full transition-all duration-500"
+                        style={{ width: `${progress.pct}%` }}
+                      />
+                    </div>
+                    <p className="text-xs text-[var(--subtle)] mt-2">{completed.length} / {total} processed — {progress.pct}%</p>
+                  </div>
+
+                  {/* Preview of the most recently completed image */}
+                  {lastPreview && (
+                    <div className="max-w-sm mx-auto glass rounded-2xl p-5 mb-8">
+                      {lastPreview.public_url ? (
+                        <img src={lastPreview.public_url} alt={lastPreview.name}
+                          className="w-full rounded-xl mb-4 object-cover aspect-square" />
+                      ) : (
+                        <div className="w-full rounded-xl mb-4 aspect-square bg-white/5 flex items-center justify-center text-xs text-red-400">
+                          Failed: {lastPreview.error}
+                        </div>
+                      )}
+                      <p className="text-sm font-medium truncate">{lastPreview.name}</p>
+                      {lastPreview.analysis?.title && (
+                        <p className="text-xs text-[var(--muted)] mt-1 line-clamp-2">{lastPreview.analysis.title}</p>
+                      )}
+                    </div>
+                  )}
+
+                  {awaitingContinue && (
+                    <div className="flex items-center justify-center gap-3">
+                      <button onClick={pauseRun}
+                        className="px-5 py-2.5 rounded-xl text-sm font-semibold border border-white/15 text-[var(--muted)] hover:text-[var(--text)] hover:border-white/30 transition-all">
+                        Save &amp; Continue Later
+                      </button>
+                      <button onClick={continueToNext}
+                        className="flex items-center gap-2 px-6 py-2.5 bg-[var(--raven)] hover:bg-[var(--raven-glow)] text-white rounded-xl text-sm font-semibold transition-all">
+                        Looks good — Continue <ChevronRight className="w-4 h-4" />
+                      </button>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
           </div>
         )}
+
       </div>
       <ADGFooter />
     </div>
