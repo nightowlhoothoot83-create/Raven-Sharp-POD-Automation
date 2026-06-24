@@ -11,13 +11,19 @@ const api = axios.create({
 api.interceptors.response.use(
   res => res,
   async err => {
-    if (err.response?.status === 401 && !err.config._retry) {
+    // Skip retry for auth/me (used for initial session check) to avoid flash loops
+    const isAuthCheck = err.config?.url?.includes("/auth/me");
+    if (err.response?.status === 401 && !err.config._retry && !isAuthCheck) {
       err.config._retry = true;
       try {
-        await axios.post("/api/auth/refresh", {}, { withCredentials: true });
+        // Use the api instance (not raw axios) so the correct baseURL is used
+        await api.post("/auth/refresh", {}, { withCredentials: true });
         return api(err.config);
       } catch {
-        window.location.href = "/login";
+        // Only redirect if NOT already on the login page (prevents infinite reload loop)
+        if (!window.location.pathname.startsWith("/login")) {
+          window.location.href = "/login";
+        }
       }
     }
     return Promise.reject(err);

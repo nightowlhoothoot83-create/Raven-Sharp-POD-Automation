@@ -305,43 +305,20 @@ async def delete_profile(profile_id: str, user: dict = Depends(get_user)):
     return {"ok": True}
 
 # ── AI Image Generation ───────────────────────────────────────────────────────
-@api.post("/image-gen")
-async def generate_images(payload: ImageGenIn, user: dict = Depends(get_user)):
-    if not check_tier_limit(user, "ai_gen_credits"):
-        raise HTTPException(403, "AI generation credits exhausted for this month")
-    if not REPLICATE_KEY:
-        raise HTTPException(500, "Replicate API key not configured — needed for both upscaling and image generation")
-
-    profile = None
-    if payload.style_profile_id:
-        profile = await db.style_profiles.find_one(
-            {"id": payload.style_profile_id, "user_id": user["id"]}, {"_id": 0})
-
-    full_prompt = payload.prompt
-    if profile:
-        full_prompt = f"{profile['base_prompt']}. {payload.prompt}"
-        if profile.get("mood_tags"):
-            full_prompt += f". Style: {', '.join(profile['mood_tags'])}"
-
-    negative = profile.get("negative_prompt", "") if profile else \
-               "text, watermarks, low quality, blurry, distorted"
-
+async def _process_image_gen(batch_id: str, user_id: str, full_prompt: str,
+                              negative: str, dims: dict, quantity: int):
+    """Background worker for image generation. Saves progress after EVERY image,
+    not just at the end — so a slow/failed generation never loses earlier results."""
     generated = []
-    # Determine aspect ratio
-    aspect_ratio = profile.get("aspect_ratio", "square") if profile else "square"
-    # FLUX.1 width/height map (must be multiples of 16, max 1440)
-    size_map = {
-        "square":    {"width": 1024, "height": 1024},
-        "portrait":  {"width": 832,  "height": 1216},
-        "landscape": {"width": 1216, "height": 832},
-        "wide":      {"width": 1344, "height": 768},
-    }
-    dims = size_map.get(aspect_ratio, {"width": 1024, "height": 1024})
-
+    total = min(quantity, 10)
     async with httpx.AsyncClient(timeout=180) as client_http:
-        for i in range(min(payload.quantity, 10)):
+        for i in range(total):
+            await db.image_gen_batches.update_one(
+                {"id": batch_id},
+                {"$set": {"current_step": f"Submitting image {i+1} of {total}...",
+                           "current_index": i}}
+            )
             try:
-                # FLUX.1 Schnell via Replicate — fast, high quality, ~$0.003/image
                 res = await client_http.post(
                     "https://api.replicate.com/v1/predictions",
                     headers={"Authorization": f"Token {REPLICATE_KEY}",
@@ -361,13 +338,21 @@ async def generate_images(payload: ImageGenIn, user: dict = Depends(get_user)):
                     })
 
                 if res.status_code != 201:
-                    log.error(f"FLUX submit error {res.status_code}: {res.text[:200]}")
+                    log.error(f"[{batch_id}] FLUX submit error {res.status_code}: {res.text[:200]}")
+                    await db.image_gen_batches.update_one(
+                        {"id": batch_id},
+                        {"$push": {"errors": {"index": i, "message": f"Replicate returned {res.status_code} — {res.text[:150]}"}}}
+                    )
                     continue
 
                 prediction_id = res.json()["id"]
 
-                # Poll for result
-                for _ in range(60):
+                await db.image_gen_batches.update_one(
+                    {"id": batch_id},
+                    {"$set": {"current_step": f"Generating image {i+1} of {total} (FLUX.1)..."}}
+                )
+
+                for poll_attempt in range(60):
                     await asyncio.sleep(3)
                     poll = await client_http.get(
                         f"https://api.replicate.com/v1/predictions/{prediction_id}",
@@ -381,31 +366,170 @@ async def generate_images(payload: ImageGenIn, user: dict = Depends(get_user)):
                             generated.append({"url": img_url, "prompt": full_prompt, "index": i})
                         break
                     elif pdata["status"] == "failed":
-                        log.error(f"FLUX prediction failed: {pdata.get('error')}")
+                        log.error(f"[{batch_id}] FLUX prediction failed: {pdata.get('error')}")
+                        await db.image_gen_batches.update_one(
+                            {"id": batch_id},
+                            {"$push": {"errors": {"index": i, "message": f"Generation failed — {pdata.get('error')}"}}}
+                        )
                         break
 
             except Exception as e:
-                log.error(f"Image gen error: {e}")
+                log.error(f"[{batch_id}] Image gen error: {e}")
+                await db.image_gen_batches.update_one(
+                    {"id": batch_id},
+                    {"$push": {"errors": {"index": i, "message": str(e)}}}
+                )
 
-    # Track usage
-    await db.users.update_one({"id": user["id"]},
+            # Save after EVERY image attempt, success or failure — never lose progress
+            await db.image_gen_batches.update_one(
+                {"id": batch_id},
+                {"$set": {"images": generated}}
+            )
+
+    await db.users.update_one({"id": user_id},
                                {"$inc": {"ai_gen_credits_used": len(generated)}})
+    await db.image_gen_batches.update_one(
+        {"id": batch_id},
+        {"$set": {"status": "pending_review", "current_step": "Done"}}
+    )
 
-    # Save to pending review
+
+async def _retry_single_image(batch_id: str, index: int, full_prompt: str, dims: dict):
+    """Regenerates one specific failed image within an existing batch,
+    without re-running or re-charging for the whole batch."""
+    async with httpx.AsyncClient(timeout=180) as client_http:
+        try:
+            res = await client_http.post(
+                "https://api.replicate.com/v1/predictions",
+                headers={"Authorization": f"Token {REPLICATE_KEY}",
+                         "Content-Type": "application/json"},
+                json={
+                    "version": "black-forest-labs/flux-schnell",
+                    "input": {
+                        "prompt": full_prompt,
+                        "width":  dims["width"],
+                        "height": dims["height"],
+                        "num_outputs": 1,
+                        "num_inference_steps": 4,
+                        "output_format": "png",
+                        "output_quality": 100,
+                        "go_fast": True,
+                    }
+                })
+            if res.status_code != 201:
+                return
+            prediction_id = res.json()["id"]
+            for _ in range(60):
+                await asyncio.sleep(3)
+                poll = await client_http.get(
+                    f"https://api.replicate.com/v1/predictions/{prediction_id}",
+                    headers={"Authorization": f"Token {REPLICATE_KEY}"})
+                pdata = poll.json()
+                if pdata["status"] == "succeeded":
+                    output = pdata.get("output")
+                    img_url = output[0] if isinstance(output, list) else output
+                    if img_url:
+                        batch = await db.image_gen_batches.find_one({"id": batch_id})
+                        images = batch.get("images", [])
+                        images.append({"url": img_url, "prompt": full_prompt, "index": index})
+                        # Remove the old error entry for this index
+                        errors = [e for e in batch.get("errors", []) if e.get("index") != index]
+                        await db.image_gen_batches.update_one(
+                            {"id": batch_id},
+                            {"$set": {"images": images, "errors": errors}}
+                        )
+                    break
+                elif pdata["status"] == "failed":
+                    break
+        except Exception as e:
+            log.error(f"[{batch_id}] Retry error for image {index}: {e}")
+
+
+@api.post("/image-gen")
+async def generate_images(payload: ImageGenIn, background_tasks: BackgroundTasks,
+                           user: dict = Depends(get_user)):
+    """Kicks off image generation and returns immediately with a batch_id.
+    Generation continues in the background — poll GET /image-gen/batches
+    or the new GET /image-gen/{batch_id} for live progress."""
+    if not check_tier_limit(user, "ai_gen_credits"):
+        raise HTTPException(403, "AI generation credits exhausted for this month")
+    if not REPLICATE_KEY:
+        raise HTTPException(500, "Replicate API key not configured — needed for both upscaling and image generation")
+
+    profile = None
+    if payload.style_profile_id:
+        profile = await db.style_profiles.find_one(
+            {"id": payload.style_profile_id, "user_id": user["id"]}, {"_id": 0})
+
+    full_prompt = payload.prompt
+    if profile:
+        full_prompt = f"{profile['base_prompt']}. {payload.prompt}"
+        if profile.get("mood_tags"):
+            full_prompt += f". Style: {', '.join(profile['mood_tags'])}"
+
+    negative = profile.get("negative_prompt", "") if profile else \
+               "text, watermarks, low quality, blurry, distorted"
+
+    aspect_ratio = profile.get("aspect_ratio", "square") if profile else "square"
+    size_map = {
+        "square":    {"width": 1024, "height": 1024},
+        "portrait":  {"width": 832,  "height": 1216},
+        "landscape": {"width": 1216, "height": 832},
+        "wide":      {"width": 1344, "height": 768},
+    }
+    dims = size_map.get(aspect_ratio, {"width": 1024, "height": 1024})
+
     batch_id = str(uuid.uuid4())
     await db.image_gen_batches.insert_one({
         "id": batch_id, "user_id": user["id"],
-        "images": generated, "status": "pending_review",
+        "images": [], "errors": [], "status": "processing",
+        "current_step": "Starting...", "current_index": 0,
+        "total_requested": min(payload.quantity, 10),
+        "prompt": full_prompt, "dims": dims,
         "created_at": datetime.now(timezone.utc)})
 
-    return {"batch_id": batch_id, "images": generated,
-            "count": len(generated), "status": "pending_review"}
+    background_tasks.add_task(
+        _process_image_gen, batch_id, user["id"],
+        full_prompt, negative, dims, payload.quantity
+    )
+
+    return {"batch_id": batch_id, "status": "processing",
+            "total_requested": min(payload.quantity, 10)}
 
 @api.get("/image-gen/batches")
 async def list_gen_batches(user: dict = Depends(get_user)):
     cursor = db.image_gen_batches.find(
         {"user_id": user["id"]}, {"_id": 0}).sort("created_at", -1).limit(20)
     return [b async for b in cursor]
+
+@api.get("/image-gen/{batch_id}")
+async def get_gen_batch(batch_id: str, user: dict = Depends(get_user)):
+    batch = await db.image_gen_batches.find_one(
+        {"id": batch_id, "user_id": user["id"]}, {"_id": 0})
+    if not batch:
+        raise HTTPException(404, "Batch not found")
+    return batch
+
+@api.post("/image-gen/{batch_id}/retry/{index}")
+async def retry_image(batch_id: str, index: int, background_tasks: BackgroundTasks,
+                       user: dict = Depends(get_user)):
+    """Re-generate just one failed image from a batch, without re-running
+    or re-charging for the whole thing."""
+    if not check_tier_limit(user, "ai_gen_credits"):
+        raise HTTPException(403, "AI generation credits exhausted for this month")
+
+    batch = await db.image_gen_batches.find_one(
+        {"id": batch_id, "user_id": user["id"]})
+    if not batch:
+        raise HTTPException(404, "Batch not found")
+
+    full_prompt = batch.get("prompt", "")
+    dims = batch.get("dims", {"width": 1024, "height": 1024})
+
+    background_tasks.add_task(_retry_single_image, batch_id, index, full_prompt, dims)
+    await db.users.update_one({"id": user["id"]}, {"$inc": {"ai_gen_credits_used": 1}})
+
+    return {"status": "retrying", "index": index}
 
 @api.post("/image-gen/{batch_id}/approve")
 async def approve_gen_batch(batch_id: str, approved_ids: List[int],
@@ -563,12 +687,69 @@ Tags: max 13 for Etsy, max 15 for Redbubble, unlimited for others."""
         if content.startswith("json"): content = content[4:]
     return json.loads(content.strip())
 
+async def _process_pipeline_images(run_id: str, user_id: str, images_payload, platform, market, price_tier):
+    """Background worker — processes images one at a time, saving progress after each.
+    Runs independently of the original HTTP request, so a closed browser tab or
+    network drop never loses completed work."""
+    results = []
+    for img_data in images_payload:
+        try:
+            image_b64 = img_data["base64"]
+            mime      = img_data.get("mime", "image/jpeg")
+            name      = img_data.get("name", "artwork")
+
+            log.info(f"[{run_id}] Upscaling {name}...")
+            upscaled_b64 = await true_upscale(image_b64, mime, scale=4)
+
+            log.info(f"[{run_id}] Uploading {name} to R2...")
+            public_url = await upload_to_r2(upscaled_b64, f"{uuid.uuid4()}-{name}.png")
+
+            log.info(f"[{run_id}] Analysing {name} with Claude Vision...")
+            analysis = await analyse_with_claude(
+                upscaled_b64, mime, platform, market, price_tier)
+
+            result_item = {
+                "id": str(uuid.uuid4()),
+                "name": name,
+                "public_url": public_url,
+                "upscaled_b64": upscaled_b64[:100] + "...",
+                "analysis": analysis,
+                "status": "pending_review",
+                "platform": platform,
+                "edited": False
+            }
+        except Exception as e:
+            log.error(f"[{run_id}] Pipeline error for {img_data.get('name')}: {e}")
+            result_item = {
+                "id": str(uuid.uuid4()),
+                "name": img_data.get("name", "unknown"),
+                "error": str(e),
+                "status": "failed"
+            }
+
+        results.append(result_item)
+
+        # Save after every single image — partial progress is never lost
+        await db.pipeline_runs.update_one(
+            {"id": run_id},
+            {"$set": {"results": results, "total_count": len(results)}}
+        )
+
+    await db.pipeline_runs.update_one(
+        {"id": run_id},
+        {"$set": {"status": "pending_review"}}
+    )
+    await db.users.update_one({"id": user_id},
+                               {"$inc": {"pipeline_runs_used": 1}})
+
+
 @api.post("/pipeline/run")
-async def run_pipeline(payload: PipelineRunIn, user: dict = Depends(get_user)):
-    """Create a pipeline run as a save point. Images are processed one at a time
-    via /pipeline/runs/{run_id}/process-next so progress is never lost — closing
-    the tab or losing connection mid-run just leaves the run 'in_progress' with
-    its already-processed results intact, ready to resume."""
+async def run_pipeline(payload: PipelineRunIn, background_tasks: BackgroundTasks,
+                        user: dict = Depends(get_user)):
+    """Kicks off the pipeline and returns immediately with a run_id.
+    Processing continues in the background — poll GET /pipeline/runs/{run_id}
+    for live progress. This means closing the browser tab or a slow connection
+    will never lose completed work; the run finishes server-side regardless."""
     tier = user.get("tier", "free")
     limits = TIERS.get(tier, TIERS["free"])
 
@@ -581,87 +762,26 @@ async def run_pipeline(payload: PipelineRunIn, user: dict = Depends(get_user)):
             raise HTTPException(403, f"Batch size exceeds your tier limit of {max_images} images")
 
     run_id = str(uuid.uuid4())
-    queue = [{"name": img.get("name", "artwork"),
-              "base64": img["base64"],
-              "mime": img.get("mime", "image/jpeg")} for img in payload.images]
 
     run = {"id": run_id, "user_id": user["id"],
            "platform": payload.platform,
-           "market": payload.market,
-           "price_tier": payload.price_tier,
-           "queue": queue,
            "results": [],
-           "status": "in_progress",
+           "status": "processing",
            "created_at": datetime.now(timezone.utc),
-           "approved_count": 0, "total_count": len(queue)}
+           "approved_count": 0, "total_count": len(payload.images)}
     await db.pipeline_runs.insert_one(run)
 
-    await db.users.update_one({"id": user["id"]},
-                               {"$inc": {"pipeline_runs_used": 1}})
+    background_tasks.add_task(
+        _process_pipeline_images, run_id, user["id"],
+        payload.images, payload.platform, payload.market, payload.price_tier
+    )
 
-    return {"run_id": run_id, "total": len(queue), "status": "in_progress"}
-
-@api.post("/pipeline/runs/{run_id}/process-next")
-async def process_next_image(run_id: str, user: dict = Depends(get_user)):
-    """Process the next not-yet-processed image in the run's queue and save the
-    result immediately. Call this repeatedly from the frontend (one call per
-    image) so each completed image's preview can be shown before continuing,
-    and so the run can be paused/resumed at any point between images."""
-    run = await db.pipeline_runs.find_one({"id": run_id, "user_id": user["id"]})
-    if not run: raise HTTPException(404, "Run not found")
-
-    processed = len(run.get("results", []))
-    queue = run.get("queue", [])
-    if processed >= len(queue):
-        if run["status"] != "pending_review":
-            await db.pipeline_runs.update_one({"id": run_id}, {"$set": {"status": "pending_review"}})
-        return {"done": True, "run_id": run_id, "total": len(queue), "processed": processed}
-
-    img_data = queue[processed]
-    name = img_data["name"]
-
-    try:
-        image_b64 = img_data["base64"]
-        mime      = img_data["mime"]
-
-        log.info(f"Upscaling {name}...")
-        upscaled_b64 = await true_upscale(image_b64, mime, scale=4)
-
-        log.info(f"Uploading {name} to R2...")
-        public_url = await upload_to_r2(upscaled_b64, f"{uuid.uuid4()}-{name}.png")
-
-        log.info(f"Analysing {name} with Claude Vision...")
-        analysis = await analyse_with_claude(
-            upscaled_b64, mime, run["platform"], run.get("market", "global"), run.get("price_tier", "mid"))
-
-        result = {
-            "id": str(uuid.uuid4()),
-            "name": name,
-            "public_url": public_url,
-            "upscaled_b64": upscaled_b64[:100] + "...",
-            "analysis": analysis,
-            "status": "pending_review",
-            "platform": run["platform"],
-            "edited": False
-        }
-    except Exception as e:
-        log.error(f"Pipeline error for {name}: {e}")
-        result = {"id": str(uuid.uuid4()), "name": name, "error": str(e), "status": "failed"}
-
-    new_processed = processed + 1
-    done = new_processed >= len(queue)
-    await db.pipeline_runs.update_one(
-        {"id": run_id},
-        {"$push": {"results": result},
-         "$set": {"status": "pending_review" if done else "in_progress"}})
-
-    return {"done": done, "run_id": run_id, "result": result,
-            "total": len(queue), "processed": new_processed}
+    return {"run_id": run_id, "status": "processing", "total": len(payload.images)}
 
 @api.get("/pipeline/runs")
 async def list_runs(user: dict = Depends(get_user)):
     cursor = db.pipeline_runs.find(
-        {"user_id": user["id"]}, {"_id": 0, "results.upscaled_b64": 0, "queue.base64": 0}
+        {"user_id": user["id"]}, {"_id": 0, "results.upscaled_b64": 0}
     ).sort("created_at", -1).limit(50)
     return [r async for r in cursor]
 
@@ -669,7 +789,7 @@ async def list_runs(user: dict = Depends(get_user)):
 async def get_run(run_id: str, user: dict = Depends(get_user)):
     run = await db.pipeline_runs.find_one(
         {"id": run_id, "user_id": user["id"]},
-        {"_id": 0, "results.upscaled_b64": 0, "queue.base64": 0})
+        {"_id": 0, "results.upscaled_b64": 0})
     if not run: raise HTTPException(404, "Run not found")
     return run
 
