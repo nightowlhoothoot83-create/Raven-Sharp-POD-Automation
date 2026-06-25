@@ -47,7 +47,7 @@ api = APIRouter(prefix="/api")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("ravensharp-pod")
 
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True,
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False,
                    allow_methods=["*"], allow_headers=["*"])
 
 # ── Tier config ───────────────────────────────────────────────────────────────
@@ -1092,29 +1092,4 @@ async def billing_status(session_id: str, user: dict = Depends(get_user)):
 
 # ── Admin ─────────────────────────────────────────────────────────────────────
 @api.get("/admin/stats")
-async def admin_stats(user: dict = Depends(get_user)):
-    if user.get("tier") != "owner":
-        raise HTTPException(403, "Owner access only")
-    users_total = await db.users.count_documents({})
-    runs_total  = await db.pipeline_runs.count_documents({})
-    by_tier = {}
-    for tier in TIERS.keys():
-        by_tier[tier] = await db.users.count_documents({"tier": tier})
-    return {"users_total": users_total, "runs_total": runs_total,
-            "users_by_tier": by_tier}
-
-# ── Health ────────────────────────────────────────────────────────────────────
-@api.get("/")
-async def root():
-    return {"service": "raven-sharp-pod", "status": "ok",
-            "version": "2.0", "part_of": "Ascension Digital Group"}
-
-app.include_router(api)
-
-@app.get("/health")
-async def health():
-    return {"status": "ok", "service": "raven-sharp-pod"}
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=True)
+async d
