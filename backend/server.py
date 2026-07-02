@@ -979,6 +979,8 @@ async def get_etsy_auth_url(user: dict = Depends(get_user)):
     """Get Etsy OAuth URL — user clicks this to connect their shop"""
     api_key = os.environ.get("ETSY_API_KEY", "")
     if not api_key:
+        raise HTTPException(503, "Etsy Connect is not configured yet. Add ETSY_API_KEY to the backend environment.")
+    if not api_key:
         raise HTTPException(500, "Etsy API key not configured — add ETSY_API_KEY to environment")
     redirect_uri = f"{os.environ.get('BACKEND_URL', 'https://raven-sharp-pod.onrender.com')}/api/etsy/callback"
     result = etsy_auth_url(user["id"], redirect_uri, api_key)

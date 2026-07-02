@@ -3,7 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import api from "../lib/api";
 import ADGFooter from "../components/ADGFooter";
-import { Wand2, Plus, Sparkles, Check, X, Trash2, ChevronRight, Zap } from "lucide-react";
+import { Wand2, Plus, Sparkles, Check, X, Trash2, ChevronRight, Zap, Download, UploadCloud } from "lucide-react";
 import { toast } from "sonner";
 
 const ASPECT_RATIOS = [
@@ -79,6 +79,33 @@ export default function ImageGen() {
     await api.delete(`/style-profiles/${id}`);
     setProfiles(prev => prev.filter(p => p.id !== id));
     toast.success("Profile deleted");
+  };
+
+  const imageToPipeline = async (img, index) => {
+    if (!img?.url) return;
+    try {
+      const res = await fetch(img.url);
+      if (!res.ok) throw new Error("Could not fetch generated image");
+      const blob = await res.blob();
+      const base64 = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result.split(",")[1]);
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+      });
+      localStorage.setItem("pendingPipelineImages", JSON.stringify([{
+        id: `generated-${Date.now()}`,
+        name: `generated-image-${index + 1}.png`,
+        size: blob.size,
+        preview: img.url,
+        base64,
+        mime: blob.type || "image/png",
+      }]));
+      toast.success("Image ready for pipeline");
+      navigate("/pipeline");
+    } catch (err) {
+      toast.error("Could not send that image to the pipeline. Download it and upload it instead.");
+    }
   };
 
   const approveBatch = async (batchId, approvedIds) => {
@@ -311,16 +338,33 @@ export default function ImageGen() {
                   <span className="text-xs text-[var(--muted)]">{batch.images?.length || 0} images</span>
                 </div>
                 {batch.images?.length > 0 && (
-                  <div className="flex gap-2 flex-wrap">
-                    {batch.images.slice(0, 4).map((img, i) => (
-                      <div key={i} className="w-16 h-16 rounded-lg overflow-hidden bg-white/5">
-                        {img.url && <img src={img.url} alt="" className="w-full h-full object-cover" />}
-                      </div>
-                    ))}
+                  <div>
+                    <div className="grid sm:grid-cols-2 gap-4">
+                      {batch.images.map((img, i) => (
+                        <div key={i} className="rounded-xl overflow-hidden bg-white/5 border border-white/10">
+                          <div className="aspect-square bg-black/20">
+                            {img.url && <img src={img.url} alt={`Generated ${i + 1}`} className="w-full h-full object-contain" />}
+                          </div>
+                          <div className="p-3 flex flex-wrap gap-2">
+                            <button
+                              onClick={() => imageToPipeline(img, i)}
+                              className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-[var(--raven)] text-white text-xs font-semibold hover:bg-[var(--raven-glow)] transition-all">
+                              <UploadCloud className="w-3.5 h-3.5" /> Use in Pipeline
+                            </button>
+                            {img.url && (
+                              <a href={img.url} download target="_blank" rel="noreferrer"
+                                className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-white/5 text-[var(--muted)] text-xs font-semibold border border-white/10 hover:text-[var(--text)] hover:bg-white/10 transition-all">
+                                <Download className="w-3.5 h-3.5" /> Download
+                              </a>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
                     {batch.status === "pending_review" && (
                       <button
                         onClick={() => approveBatch(batch.id, batch.images.map((_, i) => i))}
-                        className="flex items-center gap-1 px-3 py-1 rounded-lg bg-emerald-500/15 text-emerald-400 text-xs font-semibold border border-emerald-500/20 hover:bg-emerald-500/25 transition-all ml-2 self-center">
+                        className="mt-4 flex items-center gap-1 px-3 py-2 rounded-lg bg-emerald-500/15 text-emerald-400 text-xs font-semibold border border-emerald-500/20 hover:bg-emerald-500/25 transition-all">
                         <Check className="w-3.5 h-3.5" /> Approve All
                       </button>
                     )}

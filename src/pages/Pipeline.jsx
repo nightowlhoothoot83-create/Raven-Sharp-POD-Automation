@@ -75,6 +75,23 @@ export default function Pipeline() {
     if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
   }, []);
 
+  useEffect(() => {
+    const pending = localStorage.getItem("pendingPipelineImages");
+    if (!pending) return;
+    try {
+      const loaded = JSON.parse(pending);
+      if (Array.isArray(loaded) && loaded.length > 0) {
+        setImages(loaded.slice(0, maxImages));
+        setStep(2);
+        toast.success("Generated image loaded");
+      }
+    } catch (err) {
+      toast.error("Could not load the generated image");
+    } finally {
+      localStorage.removeItem("pendingPipelineImages");
+    }
+  }, [maxImages]);
+
   // ── Fetch connected platforms on mount ────────────────────────────────────
   useEffect(() => {
     api.get("/account/platforms")

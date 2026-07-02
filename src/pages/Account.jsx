@@ -301,8 +301,12 @@ export default function Account() {
       toast.error("Connect flow is not available for this platform yet");
       return;
     }
-    const { data } = await api.get("/etsy/auth-url");
-    window.location.href = data.auth_url;
+    try {
+      const { data } = await api.get("/etsy/auth-url");
+      window.location.href = data.auth_url;
+    } catch (err) {
+      toast.error(err.response?.data?.detail || "Etsy Connect is not ready yet");
+    }
   };
 
   const disconnectPlatform = async platform => {
