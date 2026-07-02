@@ -149,7 +149,7 @@ export default function Dashboard() {
             <div className="divide-y divide-white/5">
               {runs.slice(0, 10).map(run => (
                 <Link key={run.id}
-                  to={["in_progress", "processing"].includes(run.status) ? `/pipeline/${run.id}` : `/review/${run.id}`}
+                  to={run.status === "in_progress" ? `/pipeline/${run.id}` : `/review/${run.id}`}
                   className="flex items-center gap-4 px-6 py-4 hover:bg-white/3 transition-colors group">
                   <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${
                     run.status === "completed" ? "bg-emerald-500/15 text-emerald-400"
