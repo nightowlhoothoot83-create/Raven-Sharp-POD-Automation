@@ -37,6 +37,21 @@ STRIPE_KEY        = os.environ.get("STRIPE_API_KEY", "")
 OWNER_EMAIL       = os.environ.get("OWNER_EMAIL", "ascensiondigitalagency@outlook.com")
 ETSY_API_KEY      = os.environ.get("ETSY_API_KEY", "")
 BACKEND_URL       = os.environ.get("BACKEND_URL", "https://raven-sharp-pod.onrender.com")
+FRONTEND_URL      = os.environ.get("FRONTEND_URL", "https://pod.raven-sharp.com")
+CORS_ORIGINS      = [
+    origin.strip()
+    for origin in os.environ.get(
+        "CORS_ORIGINS",
+        ",".join([
+            FRONTEND_URL,
+            "https://pod.raven-sharp.com",
+            "https://ravensharppod.pages.dev",
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+        ]),
+    ).split(",")
+    if origin.strip()
+]
 
 client = AsyncIOMotorClient(MONGO_URL)
 db     = client[DB_NAME]
@@ -47,8 +62,14 @@ api = APIRouter(prefix="/api")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("ravensharp-pod")
 
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False,
-                   allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=CORS_ORIGINS,
+    allow_origin_regex=r"https://.*\.raven-sharp\.com",
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # ── Tier config ───────────────────────────────────────────────────────────────
 TIERS = {
@@ -165,7 +186,13 @@ def make_refresh(user_id: str) -> str:
                       JWT_SECRET, algorithm="HS256")
 
 def set_cookies(response: Response, access: str, refresh: str):
-    kw = dict(httponly=True, secure=True, samesite="none", path="/")
+    frontend_is_https = FRONTEND_URL.startswith("https://")
+    kw = dict(
+        httponly=True,
+        secure=frontend_is_https,
+        samesite="none" if frontend_is_https else "lax",
+        path="/",
+    )
     response.set_cookie("access_token", access,  max_age=86400, **kw)
     response.set_cookie("refresh_token", refresh, max_age=604800, **kw)
 
@@ -1092,4 +1119,29 @@ async def billing_status(session_id: str, user: dict = Depends(get_user)):
 
 # ── Admin ─────────────────────────────────────────────────────────────────────
 @api.get("/admin/stats")
-async d
+async def admin_stats(user: dict = Depends(get_user)):
+    if user.get("tier") != "owner":
+        raise HTTPException(403, "Owner access only")
+    users_total = await db.users.count_documents({})
+    runs_total  = await db.pipeline_runs.count_documents({})
+    by_tier = {}
+    for tier in TIERS.keys():
+        by_tier[tier] = await db.users.count_documents({"tier": tier})
+    return {"users_total": users_total, "runs_total": runs_total,
+            "users_by_tier": by_tier}
+
+# Health
+@api.get("/")
+async def root():
+    return {"service": "raven-sharp-pod", "status": "ok",
+            "version": "2.0", "part_of": "Ascension Digital Group"}
+
+app.include_router(api)
+
+@app.get("/health")
+async def health():
+    return {"status": "ok", "service": "raven-sharp-pod"}
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=True)
