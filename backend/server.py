@@ -3,7 +3,7 @@ Raven Sharp POD Suite — FastAPI Backend
 Full autonomous POD pipeline with AI upscaling, image gen, multi-platform push
 Part of Ascension Digital Group
 """
-from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depends, UploadFile, File, Form, BackgroundTasks
+from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depends, UploadFile, File, Form
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pymongo import AsyncMongoClient as AsyncIOMotorClient
@@ -799,13 +799,46 @@ async def _process_pipeline_images(run_id: str, user_id: str, images_payload, pl
                                {"$inc": {"pipeline_runs_used": 1}})
 
 
+async def _process_pipeline_image(run_id: str, img_data: dict, platform: str, market: str, price_tier: str):
+    try:
+        image_b64 = img_data["base64"]
+        mime      = img_data.get("mime", "image/jpeg")
+        name      = img_data.get("name", "artwork")
+
+        log.info(f"[{run_id}] Upscaling {name}...")
+        upscaled_b64 = await true_upscale(image_b64, mime, scale=4)
+
+        log.info(f"[{run_id}] Uploading {name} to R2...")
+        public_url = await upload_to_r2(upscaled_b64, f"{uuid.uuid4()}-{name}.png")
+
+        log.info(f"[{run_id}] Analysing {name} with Claude Vision...")
+        analysis = await analyse_with_claude(upscaled_b64, mime, platform, market, price_tier)
+
+        return {
+            "id": str(uuid.uuid4()),
+            "name": name,
+            "public_url": public_url,
+            "upscaled_b64": upscaled_b64[:100] + "...",
+            "analysis": analysis,
+            "status": "pending_review",
+            "platform": platform,
+            "edited": False
+        }
+    except Exception as e:
+        log.error(f"[{run_id}] Pipeline error for {img_data.get('name')}: {e}")
+        return {
+            "id": str(uuid.uuid4()),
+            "name": img_data.get("name", "unknown"),
+            "error": str(e),
+            "status": "failed"
+        }
+
+
 @api.post("/pipeline/run")
-async def run_pipeline(payload: PipelineRunIn, background_tasks: BackgroundTasks,
-                        user: dict = Depends(get_user)):
-    """Kicks off the pipeline and returns immediately with a run_id.
-    Processing continues in the background — poll GET /pipeline/runs/{run_id}
-    for live progress. This means closing the browser tab or a slow connection
-    will never lose completed work; the run finishes server-side regardless."""
+async def run_pipeline(payload: PipelineRunIn, user: dict = Depends(get_user)):
+    """Create a resumable pipeline run.
+    The frontend calls /process-next for each image, and the backend saves each
+    completed image before returning."""
     tier = user.get("tier", "free")
     limits = TIERS.get(tier, TIERS["free"])
 
@@ -821,23 +854,21 @@ async def run_pipeline(payload: PipelineRunIn, background_tasks: BackgroundTasks
 
     run = {"id": run_id, "user_id": user["id"],
            "platform": payload.platform,
+           "images_payload": payload.images,
+           "market": payload.market,
+           "price_tier": payload.price_tier,
            "results": [],
-           "status": "processing",
+           "status": "in_progress",
            "created_at": datetime.now(timezone.utc),
            "approved_count": 0, "total_count": len(payload.images)}
     await db.pipeline_runs.insert_one(run)
 
-    background_tasks.add_task(
-        _process_pipeline_images, run_id, user["id"],
-        payload.images, payload.platform, payload.market, payload.price_tier
-    )
-
-    return {"run_id": run_id, "status": "processing", "total": len(payload.images)}
+    return {"run_id": run_id, "status": "in_progress", "total": len(payload.images)}
 
 @api.get("/pipeline/runs")
 async def list_runs(user: dict = Depends(get_user)):
     cursor = db.pipeline_runs.find(
-        {"user_id": user["id"]}, {"_id": 0, "results.upscaled_b64": 0}
+        {"user_id": user["id"]}, {"_id": 0, "images_payload": 0, "results.upscaled_b64": 0}
     ).sort("created_at", -1).limit(50)
     return [r async for r in cursor]
 
@@ -845,9 +876,58 @@ async def list_runs(user: dict = Depends(get_user)):
 async def get_run(run_id: str, user: dict = Depends(get_user)):
     run = await db.pipeline_runs.find_one(
         {"id": run_id, "user_id": user["id"]},
-        {"_id": 0, "results.upscaled_b64": 0})
+        {"_id": 0, "images_payload": 0, "results.upscaled_b64": 0})
     if not run: raise HTTPException(404, "Run not found")
     return run
+
+@api.post("/pipeline/runs/{run_id}/process-next")
+async def process_next_pipeline_image(run_id: str, user: dict = Depends(get_user)):
+    run = await db.pipeline_runs.find_one({"id": run_id, "user_id": user["id"]})
+    if not run: raise HTTPException(404, "Run not found")
+    if run.get("status") == "completed":
+        raise HTTPException(400, "Run has already been published")
+
+    images_payload = run.get("images_payload") or []
+    results = run.get("results") or []
+    total = len(images_payload) or run.get("total_count", 0)
+
+    if len(results) >= total:
+        if run.get("status") != "pending_review":
+            update = {"status": "pending_review"}
+            if not run.get("usage_counted"):
+                update["usage_counted"] = True
+                await db.users.update_one({"id": user["id"]}, {"$inc": {"pipeline_runs_used": 1}})
+            await db.pipeline_runs.update_one({"id": run_id}, {"$set": update})
+        return {"done": True, "processed": len(results), "total": total}
+
+    result_item = await _process_pipeline_image(
+        run_id,
+        images_payload[len(results)],
+        run.get("platform"),
+        run.get("market", "global"),
+        run.get("price_tier", "mid"),
+    )
+    results.append(result_item)
+
+    done = len(results) >= total
+    update = {
+        "results": results,
+        "status": "pending_review" if done else "in_progress",
+        "total_count": total,
+        "updated_at": datetime.now(timezone.utc),
+    }
+    if done and not run.get("usage_counted"):
+        update["usage_counted"] = True
+        await db.users.update_one({"id": user["id"]}, {"$inc": {"pipeline_runs_used": 1}})
+
+    await db.pipeline_runs.update_one({"id": run_id}, {"$set": update})
+
+    return {
+        "done": done,
+        "processed": len(results),
+        "total": total,
+        "result": result_item,
+    }
 
 # ── Regenerate copy for single listing ───────────────────────────────────────
 @api.post("/pipeline/runs/{run_id}/listings/{listing_id}/regenerate")
