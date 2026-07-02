@@ -1,0 +1,112 @@
+import React, { useState } from "react";
+import { toast } from "sonner";
+import { useNavigate } from "react-router-dom";
+import api from "../lib/api";
+import { useAuth } from "../context/AuthContext";
+import { Button } from "@/components/ui/button";
+import { Check, ArrowRight } from "lucide-react";
+
+const TIERS = [
+  { id: "free", name: "Starter", price: "0",
+    perks: ["5 POD analyses / mo", "2 AI image generations", "10 image optimisations", "3 content generations", "Export CSV / JSON"] },
+  { id: "creator", name: "Creator", price: "39",
+    perks: ["50 POD analyses / mo", "30 AI image generations", "200 image optimisations", "50 content generations", "All 9 platform exports", "Gelato API publishing"] },
+  { id: "growth", name: "Growth", price: "69", featured: true,
+    perks: ["150 POD analyses / mo", "100 AI image generations", "500 image optimisations", "150 content generations", "All platform API publishing", "Priority support"] },
+  { id: "pro", name: "Pro", price: "119",
+    perks: ["500 POD analyses / mo", "300 AI image generations", "2000 image optimisations", "500 content generations", "All features", "Dedicated support"] },
+  { id: "agency", name: "Agency", price: "189",
+    perks: ["2000 POD analyses / mo", "1000 AI image generations", "Unlimited optimisations", "2000 content generations", "White label ready", "SLA support"] },
+];
+
+export default function Pricing() {
+  const { user } = useAuth();
+  const [loadingTier, setLoadingTier] = useState(null);
+  const navigate = useNavigate();
+
+  const handleCheckout = async (tier) => {
+    if (!user) {
+      // REMINDER: DO NOT HARDCODE THE URL, OR ADD ANY FALLBACKS OR REDIRECT URLS, THIS BREAKS THE AUTH
+      const redirectUrl = window.location.origin + "/pricing";
+      window.location.href = `https://auth.emergentagent.com/?redirect=${encodeURIComponent(redirectUrl)}`;
+      return;
+    }
+    if (tier === "free") {
+      navigate("/dashboard");
+      return;
+    }
+    setLoadingTier(tier);
+    try {
+      const origin_url = window.location.origin;
+      const { data } = await api.post("/billing/checkout", { tier, origin_url });
+      window.location.href = data.url;
+    } catch (e) {
+      toast.error(e.response?.data?.detail || e.message);
+      setLoadingTier(null);
+    }
+  };
+
+  return (
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16">
+      <div className="text-center mb-12 fade-up">
+        <span className="text-xs font-mono uppercase tracking-[0.25em] text-[var(--gold)]">Pricing</span>
+        <h1 className="font-display text-5xl sm:text-6xl font-black tracking-tighter mt-2">
+          Pay for what you ship.
+        </h1>
+        <p className="text-[var(--muted)] mt-4 max-w-xl mx-auto">
+          All tiers include every tool. Upgrade only when your volume demands it.
+        </p>
+        {user && (
+          <div className="inline-flex items-center gap-2 mt-5 text-xs font-mono uppercase tracking-widest px-3 py-1.5 rounded-full border border-[var(--raven)]/40 bg-[var(--raven)]/10 text-[var(--raven-glow)]">
+            Current plan: {user.tier}
+          </div>
+        )}
+      </div>
+
+      <div className="grid md:grid-cols-3 gap-6 lg:gap-8">
+        {TIERS.map((t) => {
+          const isCurrent = user?.tier === t.id;
+          return (
+            <div
+              key={t.id}
+              data-testid={`pricing-tier-${t.id}`}
+              className={`rounded-2xl p-8 ${t.featured ? "tier-card-featured" : "glass"} relative flex flex-col`}
+            >
+              {t.featured && (
+                <span className="absolute -top-3 left-1/2 -translate-x-1/2 text-[10px] font-mono uppercase tracking-widest bg-[var(--raven)] text-white px-3 py-1 rounded-full">
+                  Most Popular
+                </span>
+              )}
+              <h3 className="font-display text-2xl font-bold">{t.name}</h3>
+              <div className="mt-3 flex items-baseline gap-1">
+                <span className="text-5xl font-display font-black">${t.price}</span>
+                <span className="text-sm text-[var(--muted)]">/month</span>
+              </div>
+              <ul className="mt-6 space-y-2 flex-1">
+                {t.perks.map((p) => (
+                  <li key={p} className="flex items-start gap-2 text-sm">
+                    <Check className="w-4 h-4 mt-0.5 text-[var(--raven-glow)] shrink-0" />
+                    <span>{p}</span>
+                  </li>
+                ))}
+              </ul>
+              <Button
+                onClick={() => handleCheckout(t.id)}
+                disabled={isCurrent || loadingTier === t.id}
+                className={`mt-8 w-full h-11 ${t.featured ? "bg-[var(--raven)] hover:bg-[var(--raven-glow)]" : "bg-white/10 hover:bg-white/20"} text-white`}
+                data-testid={`pricing-cta-${t.id}`}
+              >
+                {isCurrent ? "Current Plan" : loadingTier === t.id ? "Redirecting..." : (t.id === "free" ? "Start free" : `Upgrade to ${t.name}`)}
+                {!isCurrent && loadingTier !== t.id && <ArrowRight className="w-4 h-4 ml-2" />}
+              </Button>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="mt-16 text-center text-xs font-mono uppercase tracking-widest text-[var(--subtle)]">
+        Test mode. Use card 4242 4242 4242 4242 · any future date · any CVC.
+      </div>
+    </div>
+  );
+}

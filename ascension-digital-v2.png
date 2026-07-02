@@ -1,0 +1,142 @@
+import React, { useEffect, useState } from "react";
+import { toast } from "sonner";
+import { useLocation, useNavigate } from "react-router-dom";
+import api from "../lib/api";
+import { useAuth } from "../context/AuthContext";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+
+export default function Account() {
+  const { user, checkAuth, logout } = useAuth();
+  const [gelatoKey, setGelatoKey] = useState("");
+  const [saving, setSaving] = useState(false);
+  const location = useLocation();
+  const navigate = useNavigate();
+  const [polling, setPolling] = useState(false);
+
+  useEffect(() => {
+    if (user?.gelato_api_key) setGelatoKey(user.gelato_api_key);
+  }, [user]);
+
+  // Poll Stripe checkout status if session_id present
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const sessionId = params.get("session_id");
+    if (!sessionId) return;
+    setPolling(true);
+    let attempts = 0;
+    const poll = async () => {
+      attempts++;
+      try {
+        const { data } = await api.get(`/billing/status/${sessionId}`);
+        if (data.payment_status === "paid") {
+          toast.success(`Upgraded to ${data.tier}!`);
+          await checkAuth();
+          navigate("/account", { replace: true });
+          setPolling(false);
+          return;
+        }
+        if (data.status === "expired") {
+          toast.error("Checkout expired");
+          setPolling(false);
+          return;
+        }
+      } catch (e) {
+        console.error("poll error", e);
+      }
+      if (attempts < 10) setTimeout(poll, 2000);
+      else setPolling(false);
+    };
+    poll();
+  }, [location.search, checkAuth, navigate]);
+
+  const saveGelato = async () => {
+    setSaving(true);
+    try {
+      await api.post("/account/gelato-key", { api_key: gelatoKey });
+      toast.success("Gelato key saved");
+    } catch (e) {
+      toast.error(e.response?.data?.detail || e.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!user) return null;
+
+  return (
+    <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
+      <div className="mb-8">
+        <span className="text-xs font-mono uppercase tracking-[0.25em] text-[var(--gold)]">Account</span>
+        <h1 className="font-display text-4xl sm:text-5xl font-black tracking-tighter mt-2">Your settings</h1>
+      </div>
+
+      {polling && (
+        <div className="glass rounded-xl p-4 mb-6 text-sm" data-testid="account-polling">
+          Finalising your upgrade...
+        </div>
+      )}
+
+      {/* Profile */}
+      <div className="glass rounded-2xl p-6 mb-6 flex items-center gap-4" data-testid="account-profile">
+        {user.picture && <img src={user.picture} alt="" className="w-14 h-14 rounded-full" />}
+        <div>
+          <div className="font-display text-xl font-bold">{user.name}</div>
+          <div className="text-sm text-[var(--muted)]">{user.email}</div>
+        </div>
+        <div className="ml-auto">
+          <span className="text-xs font-mono uppercase tracking-widest px-3 py-1 rounded-full border border-[var(--raven)]/40 bg-[var(--raven)]/10 text-[var(--raven-glow)]" data-testid="account-tier-badge">
+            {user.tier}
+          </span>
+        </div>
+      </div>
+
+      {/* Subscription */}
+      <div className="glass rounded-2xl p-6 mb-6" data-testid="account-subscription">
+        <h2 className="font-display text-lg font-semibold mb-2">Subscription</h2>
+        <p className="text-sm text-[var(--muted)] mb-4">You're on the <span className="text-[var(--raven-glow)] font-bold">{user.tier}</span> plan.</p>
+        <Button onClick={() => navigate("/pricing")} className="bg-[var(--raven)] hover:bg-[var(--raven-glow)] text-white" data-testid="account-upgrade-btn">
+          {user.tier === "premium" ? "Manage plan" : "Upgrade"}
+        </Button>
+      </div>
+
+      {/* Gelato key */}
+      <div className="glass rounded-2xl p-6 mb-6" data-testid="account-gelato">
+        <h2 className="font-display text-lg font-semibold">Gelato API Key</h2>
+        <p className="text-sm text-[var(--muted)] mt-1 mb-4">
+          Connect your Gelato account to publish products directly. Get your key at{" "}
+          <a href="https://dashboard.gelato.com" target="_blank" rel="noreferrer" className="text-[var(--raven-glow)] hover:underline">dashboard.gelato.com</a>.
+        </p>
+        <Label className="text-xs font-mono uppercase tracking-widest text-[var(--muted)]">API Key</Label>
+        <Input
+          type="password"
+          value={gelatoKey}
+          onChange={(e) => setGelatoKey(e.target.value)}
+          placeholder="gelato-api-key-..."
+          className="mt-1.5 mb-3"
+          data-testid="account-gelato-input"
+        />
+        <Button onClick={saveGelato} disabled={saving} variant="outline" className="bg-white/5 border-white/10" data-testid="account-gelato-save">
+          {saving ? "Saving..." : "Save"}
+        </Button>
+      </div>
+
+      {/* Logout */}
+      <div className="glass rounded-2xl p-6 flex items-center justify-between">
+        <div>
+          <h2 className="font-display text-lg font-semibold">Sign out</h2>
+          <p className="text-sm text-[var(--muted)] mt-1">End your session on this device.</p>
+        </div>
+        <Button
+          variant="outline"
+          className="bg-white/5 border-white/10 hover:bg-red-500/10 hover:border-red-500/30 hover:text-red-300"
+          onClick={async () => { await logout(); navigate("/"); }}
+          data-testid="account-logout-btn"
+        >
+          Sign out
+        </Button>
+      </div>
+    </div>
+  );
+}

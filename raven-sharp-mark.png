@@ -1,0 +1,139 @@
+import React, { useState } from "react";
+import { toast } from "sonner";
+import api from "../lib/api";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Wand2, Download, RefreshCw } from "lucide-react";
+import { downloadBase64 } from "../lib/file-utils";
+
+const STYLES = [
+  { value: "none", label: "No style preset" },
+  { value: "mystical, occult, dark, intricate, ornate", label: "Mystical / Occult" },
+  { value: "bold graphic, high contrast, flat colours", label: "Bold Graphic" },
+  { value: "bright, colourful, character-based, playful", label: "Cartoon / Character" },
+  { value: "dark moody gothic psychedelic", label: "Dark / Gothic" },
+  { value: "fine art photography landscape cinematic", label: "Fine Art / Landscape" },
+  { value: "minimalist line art, single line", label: "Minimalist Line Art" },
+  { value: "watercolour painting, soft washes", label: "Watercolour" },
+  { value: "vintage retro 70s poster, muted tones", label: "Vintage Retro" },
+];
+
+export default function ImageGen() {
+  const [prompt, setPrompt] = useState("");
+  const [style, setStyle] = useState("none");
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState(null);
+
+  const generate = async () => {
+    if (!prompt.trim()) return toast.error("Enter a prompt");
+    setLoading(true);
+    setResult(null);
+    try {
+      const { data } = await api.post("/pod/generate-image", {
+        prompt,
+        style: style === "none" ? null : style,
+      });
+      setResult(data);
+      toast.success("Image generated");
+    } catch (e) {
+      toast.error(e.response?.data?.detail || e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const download = () => {
+    if (!result) return;
+    downloadBase64(result.image_base64, `ravensharp-${Date.now()}.png`, result.mime_type);
+  };
+
+  const sendToPod = () => {
+    if (!result) return;
+    sessionStorage.setItem("rs_pending_artwork", JSON.stringify({
+      name: `generated-${Date.now()}.png`,
+      base64: result.image_base64,
+      mime: result.mime_type,
+    }));
+    toast.success("Sent to POD Suite");
+    window.location.href = "/pod-suite";
+  };
+
+  return (
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
+      <div className="mb-8">
+        <span className="text-xs font-mono uppercase tracking-[0.25em] text-[var(--gold)]">AI Image Generation</span>
+        <h1 className="font-display text-4xl sm:text-5xl font-black tracking-tighter mt-2">
+          Conjure print-ready artwork
+        </h1>
+        <p className="text-[var(--muted)] mt-2">Gemini Nano Banana. Describe it. Ship it.</p>
+      </div>
+
+      <div className="grid lg:grid-cols-5 gap-6">
+        <div className="lg:col-span-2 space-y-4 glass rounded-2xl p-6" data-testid="imgen-panel">
+          <div>
+            <Label className="text-xs font-mono uppercase tracking-widest text-[var(--muted)]">Prompt</Label>
+            <Textarea
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
+              placeholder="A mystical raven wreathed in gold smoke, art nouveau, deep indigo background, intricate linework..."
+              rows={8}
+              className="mt-1.5 bg-black/40 border-white/10"
+              data-testid="imgen-prompt"
+            />
+          </div>
+          <div>
+            <Label className="text-xs font-mono uppercase tracking-widest text-[var(--muted)]">Style Preset</Label>
+            <Select value={style} onValueChange={setStyle}>
+              <SelectTrigger className="mt-1.5" data-testid="imgen-style"><SelectValue /></SelectTrigger>
+              <SelectContent>{STYLES.map((s) => <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>)}</SelectContent>
+            </Select>
+          </div>
+          <Button
+            onClick={generate}
+            disabled={loading}
+            className="w-full h-12 bg-[var(--raven)] hover:bg-[var(--raven-glow)] text-white"
+            data-testid="imgen-generate-btn"
+          >
+            {loading ? (<><RefreshCw className="w-4 h-4 mr-2 animate-spin" /> Generating...</>) : (<><Wand2 className="w-4 h-4 mr-2" /> Generate</>)}
+          </Button>
+        </div>
+
+        <div className="lg:col-span-3">
+          <div className="glass rounded-2xl p-6 min-h-[500px] flex items-center justify-center" data-testid="imgen-canvas">
+            {loading ? (
+              <div className="text-center">
+                <RefreshCw className="w-10 h-10 text-[var(--raven-glow)] animate-spin mx-auto mb-4" />
+                <div className="text-sm font-mono uppercase tracking-widest text-[var(--muted)]">Channeling pixels...</div>
+              </div>
+            ) : result ? (
+              <div className="w-full space-y-4">
+                <img
+                  src={`data:${result.mime_type};base64,${result.image_base64}`}
+                  alt="Generated artwork"
+                  className="w-full rounded-xl border border-white/10"
+                  data-testid="imgen-result"
+                />
+                <div className="flex gap-2 flex-wrap">
+                  <Button onClick={download} variant="outline" className="bg-white/5 border-white/10" data-testid="imgen-download">
+                    <Download className="w-4 h-4 mr-2" /> Download PNG
+                  </Button>
+                  <Button onClick={sendToPod} className="bg-[var(--raven)] hover:bg-[var(--raven-glow)] text-white" data-testid="imgen-send-pod">
+                    Send to POD Suite →
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <div className="text-center">
+                <Wand2 className="w-10 h-10 text-[var(--subtle)] mx-auto mb-3" />
+                <div className="text-sm text-[var(--muted)]">Your generated artwork will appear here</div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}

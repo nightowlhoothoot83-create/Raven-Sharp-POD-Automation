@@ -1,0 +1,247 @@
+import React from "react";
+import { Link } from "react-router-dom";
+import { Button } from "@/components/ui/button";
+import { Sparkles, Wand2, FileText, Image as ImageIcon, Check, ArrowRight } from "lucide-react";
+import { useAuth } from "../context/AuthContext";
+import { Logo } from "../components/Logo";
+
+const HERO_IMG = "https://images.unsplash.com/photo-1698768144526-78ae2ab76bbe?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxOTB8MHwxfHNlYXJjaHwxfHxteXN0aWNhbCUyMHJhdmVuJTIwZmVhdGhlciUyMGRhcmt8ZW58MHx8fHwxNzc3NTIxNzY4fDA&ixlib=rb-4.1.0&q=85";
+const TOOL_AI_IMG = "https://images.unsplash.com/photo-1762278804729-13d330fad71a?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2NzF8MHwxfHNlYXJjaHwxfHxhYnN0cmFjdCUyMGRhcmslMjBwdXJwbGUlMjBnbG93aW5nJTIwdGVjaHxlbnwwfHx8fDE3Nzc1MjE3Njh8MA&ixlib=rb-4.1.0&q=85";
+const TOOL_CONTENT_IMG = "https://images.pexels.com/photos/30766684/pexels-photo-30766684.png?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940";
+const MOCKUP_IMG = "https://images.pexels.com/photos/8532638/pexels-photo-8532638.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940";
+
+const TIERS = [
+  {
+    id: "free",
+    name: "Starter",
+    price: "0",
+    desc: "Kick the tyres — keep every artwork you make.",
+    perks: ["5 POD analyses / mo", "2 AI image generations", "10 image optimisations", "3 content generations", "Export CSV / JSON"],
+    cta: "Start free",
+  },
+  {
+    id: "pro",
+    name: "Pro",
+    price: "19",
+    desc: "For serious Etsy / Redbubble sellers shipping weekly drops.",
+    featured: true,
+    perks: ["100 POD analyses / mo", "30 AI image generations", "500 image optimisations", "100 content generations", "Gelato publishing", "Priority support"],
+    cta: "Go Pro",
+  },
+  {
+    id: "premium",
+    name: "Premium",
+    price: "49",
+    desc: "For agencies & creators running multiple shops.",
+    perks: ["1000 POD analyses / mo", "200 AI image generations", "Unlimited optimisations*", "500 content generations", "Early access to new tools", "Dedicated support"],
+    cta: "Go Premium",
+  },
+];
+
+export default function Landing() {
+  const { user } = useAuth();
+  const handleLogin = () => {
+    // REMINDER: DO NOT HARDCODE THE URL, OR ADD ANY FALLBACKS OR REDIRECT URLS, THIS BREAKS THE AUTH
+    const redirectUrl = window.location.origin + "/dashboard";
+    window.location.href = `https://auth.emergentagent.com/?redirect=${encodeURIComponent(redirectUrl)}`;
+  };
+
+  return (
+    <div className="relative">
+      {/* HERO */}
+      <section className="relative overflow-hidden pt-20 pb-24 sm:pt-28 sm:pb-32">
+        <div
+          className="absolute inset-0 opacity-30"
+          style={{
+            backgroundImage: `url(${HERO_IMG})`,
+            backgroundSize: "cover",
+            backgroundPosition: "center",
+            maskImage: "linear-gradient(180deg, rgba(0,0,0,0.8) 0%, rgba(0,0,0,0.2) 60%, transparent 100%)",
+            WebkitMaskImage: "linear-gradient(180deg, rgba(0,0,0,0.8) 0%, rgba(0,0,0,0.2) 60%, transparent 100%)",
+          }}
+        />
+        <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="grid lg:grid-cols-12 gap-10 items-center">
+            <div className="lg:col-span-7 max-w-3xl fade-up">
+              <span className="inline-block text-xs font-mono uppercase tracking-[0.25em] text-[var(--raven-glow)] border border-[var(--raven)]/40 bg-[var(--raven)]/10 px-3 py-1.5 rounded-full mb-6" data-testid="hero-tagline">
+                ✦ Raven Sharp Studio v1
+              </span>
+              <h1 className="font-display text-5xl sm:text-7xl font-black tracking-tighter leading-[0.95] mb-6">
+                Turn one artwork<br/>
+                into <span className="bg-gradient-to-r from-[var(--raven-glow)] via-[var(--gold)] to-[var(--raven-glow)] bg-clip-text text-transparent">a whole product line.</span>
+              </h1>
+              <p className="text-lg sm:text-xl text-[var(--muted)] max-w-xl mb-8 leading-relaxed">
+                AI creator tools built for POD sellers. Drop in artwork — ship products, mockups, SEO copy and Gelato-ready exports in under 60 seconds.
+              </p>
+              <div className="flex flex-wrap gap-3">
+                {user ? (
+                  <Link to="/dashboard">
+                    <Button className="bg-[var(--raven)] hover:bg-[var(--raven-glow)] text-white px-8 h-12 text-base" data-testid="hero-dashboard-btn">
+                      Open Studio <ArrowRight className="ml-2 w-4 h-4" />
+                    </Button>
+                  </Link>
+                ) : (
+                  <Button
+                    onClick={handleLogin}
+                    className="bg-[var(--raven)] hover:bg-[var(--raven-glow)] text-white px-8 h-12 text-base glow-pulse"
+                    data-testid="hero-signin-btn"
+                  >
+                    Get started free <ArrowRight className="ml-2 w-4 h-4" />
+                  </Button>
+                )}
+                <Link to="/pricing">
+                  <Button variant="outline" className="border-white/20 bg-white/5 hover:bg-white/10 text-white px-8 h-12 text-base" data-testid="hero-pricing-btn">
+                    See pricing
+                  </Button>
+                </Link>
+              </div>
+              <div className="mt-10 flex flex-wrap gap-6 text-xs font-mono uppercase tracking-widest text-[var(--subtle)]">
+                <span>★ Claude Sonnet 4.5 Vision</span>
+                <span>★ Gemini Nano Banana</span>
+                <span>★ Gelato-ready CSVs</span>
+              </div>
+            </div>
+            <div className="hidden lg:flex lg:col-span-5 justify-center items-center fade-up" data-testid="hero-logo-mark">
+              <div className="relative">
+                <div className="absolute inset-0 rounded-full bg-[var(--raven)]/20 blur-3xl" />
+                <Logo variant="full" size="lg" className="relative" />
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* TOOLS BENTO */}
+      <section className="relative py-16 sm:py-24">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="mb-12">
+            <span className="text-xs font-mono uppercase tracking-[0.25em] text-[var(--gold)]">The Suite</span>
+            <h2 className="font-display text-4xl sm:text-5xl font-bold tracking-tighter mt-2">Four tools. One flow.</h2>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-12 gap-6">
+            <ToolCard
+              span="md:col-span-8"
+              testid="landing-tool-pod"
+              icon={<Sparkles />}
+              tag="POD Suite"
+              title="Drop artwork → get a full product portfolio"
+              desc="Claude Vision reads your art, recommends 6-8 POD products with realistic base costs, retail pricing, SEO title, description and 13 keywords. Export a Gelato-ready CSV in one click."
+              bg={MOCKUP_IMG}
+            />
+            <ToolCard
+              span="md:col-span-4"
+              testid="landing-tool-imgen"
+              icon={<Wand2 />}
+              tag="AI Image Gen"
+              title="Make the artwork, then sell it"
+              desc="Gemini Nano Banana. Text → print-ready art. Straight into the POD pipeline."
+              bg={TOOL_AI_IMG}
+              tall
+            />
+            <ToolCard
+              span="md:col-span-4"
+              testid="landing-tool-optimiser"
+              icon={<ImageIcon />}
+              tag="Optimiser"
+              title="POD-grade image prep"
+              desc="Resize to print specs, sharpen, boost saturation, convert formats. No photoshop needed."
+              tall
+            />
+            <ToolCard
+              span="md:col-span-8"
+              testid="landing-tool-content"
+              icon={<FileText />}
+              tag="Content Engine"
+              title="Descriptions, blogs, SEO copy, captions"
+              desc="Feed a product or topic in. Get copy that converts — in your tone, tuned to your keywords."
+              bg={TOOL_CONTENT_IMG}
+            />
+          </div>
+        </div>
+      </section>
+
+      {/* PRICING */}
+      <section className="relative py-16 sm:py-24" id="pricing">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="text-center mb-12">
+            <span className="text-xs font-mono uppercase tracking-[0.25em] text-[var(--gold)]">Pricing</span>
+            <h2 className="font-display text-4xl sm:text-5xl font-bold tracking-tighter mt-2">Pay for what you ship.</h2>
+            <p className="text-[var(--muted)] mt-4 max-w-xl mx-auto">Every tier includes all four tools. Upgrade only when your volume says so.</p>
+          </div>
+          <div className="grid md:grid-cols-3 gap-6 lg:gap-8">
+            {TIERS.map((t) => (
+              <div
+                key={t.id}
+                data-testid={`landing-tier-${t.id}`}
+                className={`rounded-2xl p-8 ${t.featured ? "tier-card-featured" : "glass"} relative flex flex-col`}
+              >
+                {t.featured && (
+                  <span className="absolute -top-3 left-1/2 -translate-x-1/2 text-[10px] font-mono uppercase tracking-widest bg-[var(--raven)] text-white px-3 py-1 rounded-full">
+                    Most Popular
+                  </span>
+                )}
+                <h3 className="font-display text-2xl font-bold">{t.name}</h3>
+                <div className="mt-3 flex items-baseline gap-1">
+                  <span className="text-5xl font-display font-black">${t.price}</span>
+                  <span className="text-sm text-[var(--muted)]">/month</span>
+                </div>
+                <p className="mt-3 text-sm text-[var(--muted)]">{t.desc}</p>
+                <ul className="mt-6 space-y-2 flex-1">
+                  {t.perks.map((p) => (
+                    <li key={p} className="flex items-start gap-2 text-sm text-[var(--text)]">
+                      <Check className="w-4 h-4 mt-0.5 text-[var(--raven-glow)] shrink-0" />
+                      <span>{p}</span>
+                    </li>
+                  ))}
+                </ul>
+                {user ? (
+                  <Link to="/pricing">
+                    <Button
+                      className={`mt-8 w-full h-11 ${t.featured ? "bg-[var(--raven)] hover:bg-[var(--raven-glow)]" : "bg-white/10 hover:bg-white/20"} text-white`}
+                      data-testid={`landing-tier-${t.id}-cta`}
+                    >
+                      {t.cta}
+                    </Button>
+                  </Link>
+                ) : (
+                  <Button
+                    onClick={handleLogin}
+                    className={`mt-8 w-full h-11 ${t.featured ? "bg-[var(--raven)] hover:bg-[var(--raven-glow)]" : "bg-white/10 hover:bg-white/20"} text-white`}
+                    data-testid={`landing-tier-${t.id}-cta`}
+                  >
+                    {t.cta}
+                  </Button>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function ToolCard({ span, icon, tag, title, desc, bg, tall, testid }) {
+  return (
+    <div
+      data-testid={testid}
+      className={`relative overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--surface)] p-8 card-hover ${span} ${tall ? "min-h-[320px]" : "min-h-[240px]"} flex flex-col justify-end`}
+      style={bg ? {
+        backgroundImage: `linear-gradient(180deg, rgba(15,15,26,0.3) 0%, rgba(15,15,26,0.95) 70%), url(${bg})`,
+        backgroundSize: "cover",
+        backgroundPosition: "center",
+      } : {}}
+    >
+      <div className="relative z-10">
+        <div className="flex items-center gap-2 mb-3">
+          <span className="w-8 h-8 rounded-full bg-[var(--raven)]/20 border border-[var(--raven)]/40 flex items-center justify-center text-[var(--raven-glow)]">
+            {React.cloneElement(icon, { className: "w-4 h-4" })}
+          </span>
+          <span className="text-xs font-mono uppercase tracking-[0.2em] text-[var(--raven-glow)]">{tag}</span>
+        </div>
+        <h3 className="font-display text-2xl sm:text-3xl font-bold tracking-tight mb-2">{title}</h3>
+        <p className="text-sm text-[var(--muted)] max-w-md leading-relaxed">{desc}</p>
+      </div>
+    </div>
+  );
+}

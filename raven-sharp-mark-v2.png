@@ -1,0 +1,146 @@
+import React, { useState } from "react";
+import { toast } from "sonner";
+import api from "../lib/api";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { FileText, Copy, RefreshCw } from "lucide-react";
+
+const TYPES = [
+  { value: "product_description", label: "Product Description" },
+  { value: "blog_post", label: "Blog Post" },
+  { value: "seo_copy", label: "SEO Copy" },
+  { value: "social_caption", label: "Social Captions" },
+];
+const TONES = ["engaging", "witty", "professional", "mystical", "conversational", "luxurious", "punchy"];
+const LENGTHS = [
+  { value: "short", label: "Short" },
+  { value: "medium", label: "Medium" },
+  { value: "long", label: "Long" },
+];
+
+export default function ContentEngine() {
+  const [contentType, setContentType] = useState("product_description");
+  const [topic, setTopic] = useState("");
+  const [tone, setTone] = useState("engaging");
+  const [length, setLength] = useState("medium");
+  const [keywords, setKeywords] = useState("");
+  const [output, setOutput] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const run = async () => {
+    if (!topic.trim()) return toast.error("Enter a topic");
+    setLoading(true);
+    setOutput("");
+    try {
+      const { data } = await api.post("/content/generate", {
+        content_type: contentType,
+        topic,
+        tone,
+        length,
+        keywords: keywords.split(",").map((k) => k.trim()).filter(Boolean),
+      });
+      setOutput(data.content);
+      toast.success("Content generated");
+    } catch (e) {
+      toast.error(e.response?.data?.detail || e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
+      <div className="mb-8">
+        <span className="text-xs font-mono uppercase tracking-[0.25em] text-[var(--gold)]">Content Engine</span>
+        <h1 className="font-display text-4xl sm:text-5xl font-black tracking-tighter mt-2">
+          Copy that converts.
+        </h1>
+        <p className="text-[var(--muted)] mt-2">Claude Sonnet 4.5. On-brand. On-demand.</p>
+      </div>
+
+      <div className="grid lg:grid-cols-5 gap-6">
+        <div className="lg:col-span-2 glass rounded-2xl p-6 space-y-5" data-testid="content-panel">
+          <div>
+            <Label className="text-xs font-mono uppercase tracking-widest text-[var(--muted)]">Content Type</Label>
+            <Select value={contentType} onValueChange={setContentType}>
+              <SelectTrigger className="mt-1.5" data-testid="content-type"><SelectValue /></SelectTrigger>
+              <SelectContent>{TYPES.map((t) => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}</SelectContent>
+            </Select>
+          </div>
+          <div>
+            <Label className="text-xs font-mono uppercase tracking-widest text-[var(--muted)]">Topic / Product</Label>
+            <Textarea
+              value={topic}
+              onChange={(e) => setTopic(e.target.value)}
+              placeholder="A mystical raven art print for Etsy — dark gothic home decor for witches and tarot readers..."
+              rows={4}
+              className="mt-1.5 bg-black/40 border-white/10"
+              data-testid="content-topic"
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label className="text-xs font-mono uppercase tracking-widest text-[var(--muted)]">Tone</Label>
+              <Select value={tone} onValueChange={setTone}>
+                <SelectTrigger className="mt-1.5" data-testid="content-tone"><SelectValue /></SelectTrigger>
+                <SelectContent>{TONES.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label className="text-xs font-mono uppercase tracking-widest text-[var(--muted)]">Length</Label>
+              <Select value={length} onValueChange={setLength}>
+                <SelectTrigger className="mt-1.5" data-testid="content-length"><SelectValue /></SelectTrigger>
+                <SelectContent>{LENGTHS.map((l) => <SelectItem key={l.value} value={l.value}>{l.label}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+          </div>
+          <div>
+            <Label className="text-xs font-mono uppercase tracking-widest text-[var(--muted)]">Keywords (comma separated)</Label>
+            <Input
+              value={keywords}
+              onChange={(e) => setKeywords(e.target.value)}
+              placeholder="raven art, gothic decor, occult print"
+              className="mt-1.5"
+              data-testid="content-keywords"
+            />
+          </div>
+          <Button
+            onClick={run}
+            disabled={loading}
+            className="w-full h-11 bg-[var(--raven)] hover:bg-[var(--raven-glow)] text-white"
+            data-testid="content-generate-btn"
+          >
+            {loading ? (<><RefreshCw className="w-4 h-4 mr-2 animate-spin" /> Writing...</>) : (<><FileText className="w-4 h-4 mr-2" /> Generate</>)}
+          </Button>
+        </div>
+
+        <div className="lg:col-span-3 glass rounded-2xl p-6 min-h-[500px]" data-testid="content-output">
+          {output ? (
+            <>
+              <div className="flex items-center justify-between mb-4">
+                <span className="text-xs font-mono uppercase tracking-widest text-[var(--gold)]">Output</span>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="bg-white/5 border-white/10"
+                  onClick={() => { navigator.clipboard.writeText(output); toast.success("Copied"); }}
+                  data-testid="content-copy-btn"
+                >
+                  <Copy className="w-3.5 h-3.5 mr-1" /> Copy
+                </Button>
+              </div>
+              <pre className="whitespace-pre-wrap font-mono text-sm leading-relaxed text-[var(--text)]">{output}</pre>
+            </>
+          ) : (
+            <div className="h-full flex items-center justify-center text-sm text-[var(--muted)]">
+              Your generated content will appear here
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}

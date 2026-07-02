@@ -1,0 +1,45 @@
+import React, { useEffect, useRef } from "react";
+import { useNavigate } from "react-router-dom";
+import api from "../lib/api";
+import { useAuth } from "../context/AuthContext";
+import { Logo } from "../components/Logo";
+
+export default function AuthCallback() {
+  const navigate = useNavigate();
+  const { setUser } = useAuth();
+  const hasProcessed = useRef(false);
+
+  useEffect(() => {
+    if (hasProcessed.current) return;
+    hasProcessed.current = true;
+
+    const hash = window.location.hash || "";
+    const match = hash.match(/session_id=([^&]+)/);
+    if (!match) { navigate("/"); return; }
+    const session_id = match[1];
+
+    (async () => {
+      try {
+        const { data } = await api.post("/auth/login-session", { session_id });
+        setUser(data.user);
+        window.history.replaceState(null, "", window.location.pathname);
+        navigate("/dashboard", { state: { user: data.user } });
+      } catch (e) {
+        console.error("Auth callback failed", e);
+        navigate("/?auth=failed");
+      }
+    })();
+  }, [navigate, setUser]);
+
+  return (
+    <div className="min-h-screen flex items-center justify-center relative overflow-hidden">
+      <div className="absolute inset-0 bg-[radial-gradient(at_50%_50%,rgba(124,92,191,0.25),transparent_60%)]" />
+      <div className="text-center fade-up relative">
+        <Logo variant="full" size="lg" />
+        <p className="mt-8 text-[var(--raven-glow)] font-mono text-xs uppercase tracking-[0.25em]" data-testid="auth-callback-status">
+          ✦ Signing you in
+        </p>
+      </div>
+    </div>
+  );
+}

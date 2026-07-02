@@ -1,0 +1,406 @@
+import React, { useRef, useState } from "react";
+import { toast } from "sonner";
+import api from "../lib/api";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Upload, Sparkles, Trash2, Download, Check, X, Copy } from "lucide-react";
+import { fileToBase64, downloadText } from "../lib/file-utils";
+
+const MARKETS = [
+  { value: "global", label: "Global" },
+  { value: "us", label: "United States" },
+  { value: "uk", label: "United Kingdom" },
+  { value: "au", label: "Australia" },
+  { value: "eu", label: "Europe" },
+  { value: "ca", label: "Canada" },
+];
+const TIERS = [
+  { value: "budget", label: "Budget" },
+  { value: "mid", label: "Mid-Range" },
+  { value: "premium", label: "Premium" },
+];
+const PLATFORMS = [
+  { value: "etsy",            label: "ud83dudecdufe0f Etsy",            api: true },
+  { value: "printify",        label: "ud83dudddcufe0f Printify",        api: true },
+  { value: "printful",        label: "ud83dudce6 Printful",          api: true },
+  { value: "gelato",          label: "ud83cudf3f Gelato",            api: true },
+  { value: "shopify",         label: "ud83cudfea Shopify",           api: true },
+  { value: "redbubble",       label: "ud83dudd34 Redbubble",         api: false },
+  { value: "teepublic",       label: "ud83dudc55 TeePublic",         api: false },
+  { value: "merch_by_amazon", label: "ud83dudce6 Merch by Amazon",   api: false },
+  { value: "zazzle",          label: "ud83cudfa8 Zazzle",            api: false },
+];
+
+export default function PodSuite() {
+  const [images, setImages] = useState([]);
+  const [results, setResults] = useState([]);
+  const [approved, setApproved] = useState({}); // key `${rIdx}-${pIdx}` → bool
+  const [loading, setLoading] = useState(false);
+  const [progress, setProgress] = useState({ done: 0, total: 0, step: "" });
+  const [settings, setSettings] = useState({
+    primaryMarket: "global",
+    priceTier: "mid",
+    shopName: "",
+    platform: "etsy",
+  });
+  const fileRef = useRef(null);
+
+  const onFiles = async (files) => {
+    const next = [];
+    for (const f of Array.from(files).slice(0, 20)) {
+      if (!f.type.startsWith("image/")) continue;
+      const b64 = await fileToBase64(f);
+      next.push({ name: f.name, mime: f.type, base64: b64.split(",")[1], src: b64 });
+    }
+    setImages((prev) => [...prev, ...next]);
+  };
+
+  const onDrop = (e) => {
+    e.preventDefault();
+    onFiles(e.dataTransfer.files);
+  };
+
+  const runAnalysis = async () => {
+    if (images.length === 0) return toast.error("Add at least one artwork");
+    setLoading(true);
+    setResults([]);
+    setApproved({});
+    const out = [];
+    for (let i = 0; i < images.length; i++) {
+      setProgress({ done: i, total: images.length, step: `Analysing ${images[i].name}...` });
+      try {
+        const { data } = await api.post("/pod/analyze", {
+          image_base64: images[i].base64,
+          mime_type: images[i].mime,
+          image_name: images[i].name,
+          primary_market: settings.primaryMarket,
+          price_tier: settings.priceTier,
+          shop_name: settings.shopName,
+          platform: settings.platform,
+        });
+        out.push({ image: images[i], data: data.analysis });
+      } catch (e) {
+        const msg = e.response?.data?.detail || e.message;
+        toast.error(`${images[i].name}: ${msg}`);
+        out.push({ image: images[i], error: msg });
+      }
+    }
+    setResults(out);
+    setProgress({ done: images.length, total: images.length, step: "Done" });
+    setLoading(false);
+    toast.success(`Analysed ${out.filter((r) => !r.error).length}/${out.length}`);
+  };
+
+  const toggleApproved = (rIdx, pIdx) => {
+    const k = `${rIdx}-${pIdx}`;
+    setApproved((prev) => ({ ...prev, [k]: !prev[k] }));
+  };
+
+  const approveAll = () => {
+    const next = {};
+    results.forEach((r, ri) => {
+      (r.data?.recommendedProducts || []).forEach((_, pi) => { next[`${ri}-${pi}`] = true; });
+    });
+    setApproved(next);
+  };
+
+  const clearAll = () => setApproved({});
+
+  const approvedCount = Object.values(approved).filter(Boolean).length;
+  const totalProducts = results.reduce((s, r) => s + (r.data?.recommendedProducts?.length || 0), 0);
+
+  const exportCSV = () => {
+    const rows = [["Image", "Product", "Category", "BaseCost", "Retail", "Margin%", "Variants", "SEO Title", "Keywords"]];
+    results.forEach((r) => {
+      if (r.error) return;
+      (r.data.recommendedProducts || []).forEach((p) => {
+        rows.push([
+          r.image.name, p.product, p.category, p.baseCostUSD, p.suggestedRetailUSD,
+          p.profitMarginPct, p.variants, r.data.seoTitle, (r.data.keywords || []).join("|"),
+        ]);
+      });
+    });
+    const csv = rows.map((row) => row.map((c) => `"${String(c ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
+    downloadText(csv, "ravensharp-portfolio.csv", "text/csv");
+  };
+
+  const exportJSON = () => {
+    const clean = results.map((r) => ({ image_name: r.image.name, analysis: r.data, error: r.error }));
+    downloadText(JSON.stringify(clean, null, 2), "ravensharp-portfolio.json", "application/json");
+  };
+
+  const copyToClipboard = (text, label) => {
+    navigator.clipboard.writeText(text);
+    toast.success(`${label} copied`);
+  };
+
+  return (
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
+      <div className="mb-8">
+        <span className="text-xs font-mono uppercase tracking-[0.25em] text-[var(--gold)]">POD Suite</span>
+        <h1 className="font-display text-4xl sm:text-5xl font-black tracking-tighter mt-2">
+          Build your product portfolio
+        </h1>
+        <p className="text-[var(--muted)] mt-2">Drop artwork. Claude Vision does the strategy. You ship.</p>
+      </div>
+
+      <div className="grid lg:grid-cols-3 gap-6">
+        {/* Left: Settings */}
+        <div className="lg:col-span-1 space-y-6">
+          {/* Dropzone */}
+          <div
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={onDrop}
+            onClick={() => fileRef.current?.click()}
+            className="dropzone rounded-2xl p-8 text-center cursor-pointer"
+            data-testid="pod-dropzone"
+          >
+            <Upload className="w-10 h-10 mx-auto mb-3 text-[var(--raven-glow)]" />
+            <div className="font-display text-xl font-semibold">Drop artwork here</div>
+            <div className="text-xs font-mono uppercase tracking-widest text-[var(--muted)] mt-2">
+              JPG · PNG · WEBP · up to 20
+            </div>
+            <input
+              ref={fileRef}
+              type="file"
+              accept="image/*"
+              multiple
+              className="hidden"
+              onChange={(e) => onFiles(e.target.files)}
+              data-testid="pod-file-input"
+            />
+          </div>
+
+          {/* Thumbs */}
+          {images.length > 0 && (
+            <div className="grid grid-cols-3 gap-2" data-testid="pod-thumbs">
+              {images.map((img, i) => (
+                <div key={i} className="relative group aspect-square rounded-lg overflow-hidden bg-white/5 border border-white/10">
+                  <img src={img.src} alt={img.name} className="w-full h-full object-cover" />
+                  <button
+                    onClick={() => setImages(images.filter((_, idx) => idx !== i))}
+                    className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 bg-black/60 rounded p-1 transition-opacity"
+                    data-testid={`pod-remove-${i}`}
+                  >
+                    <Trash2 className="w-3 h-3 text-white" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Settings */}
+          <div className="glass rounded-2xl p-6 space-y-4" data-testid="pod-settings">
+            <h3 className="font-display text-lg font-semibold">Settings</h3>
+            <div>
+              <Label htmlFor="market" className="text-xs font-mono uppercase tracking-widest text-[var(--muted)]">Primary Market</Label>
+              <Select value={settings.primaryMarket} onValueChange={(v) => setSettings({ ...settings, primaryMarket: v })}>
+                <SelectTrigger id="market" className="mt-1.5" data-testid="pod-market-select"><SelectValue /></SelectTrigger>
+                <SelectContent>{MARKETS.map((m) => <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label className="text-xs font-mono uppercase tracking-widest text-[var(--muted)]">Price Tier</Label>
+              <Select value={settings.priceTier} onValueChange={(v) => setSettings({ ...settings, priceTier: v })}>
+                <SelectTrigger className="mt-1.5" data-testid="pod-tier-select"><SelectValue /></SelectTrigger>
+                <SelectContent>{TIERS.map((t) => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label className="text-xs font-mono uppercase tracking-widest text-[var(--muted)]">Shop Name</Label>
+              <Input
+                placeholder="e.g. Raven Sharp Studio"
+                value={settings.shopName}
+                onChange={(e) => setSettings({ ...settings, shopName: e.target.value })}
+                className="mt-1.5"
+                data-testid="pod-shop-input"
+              />
+            </div>
+            <div>
+              <Label className="text-xs font-mono uppercase tracking-widest text-[var(--muted)]">Platform</Label>
+              <Select value={settings.platform} onValueChange={(v) => setSettings({ ...settings, platform: v })}>
+                <SelectTrigger className="mt-1.5" data-testid="pod-platform-select"><SelectValue /></SelectTrigger>
+                <SelectContent>{PLATFORMS.map((p) => <SelectItem key={p.value} value={p.value}>{p.label}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          <Button
+            onClick={runAnalysis}
+            disabled={loading || images.length === 0}
+            className="w-full h-12 bg-[var(--raven)] hover:bg-[var(--raven-glow)] text-white text-base"
+            data-testid="pod-analyze-btn"
+          >
+            <Sparkles className="w-4 h-4 mr-2" />
+            {loading ? "Analysing..." : "Analyse & Build Portfolio"}
+          </Button>
+
+          {loading && (
+            <div className="glass rounded-xl p-4" data-testid="pod-progress">
+              <div className="flex items-center justify-between text-xs font-mono uppercase tracking-widest text-[var(--muted)] mb-2">
+                <span>{progress.step}</span>
+                <span>{progress.done}/{progress.total}</span>
+              </div>
+              <div className="rs-progress-track">
+                <div className="rs-progress-fill" style={{ width: `${(progress.done / Math.max(1, progress.total)) * 100}%` }} />
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Right: Results */}
+        <div className="lg:col-span-2 space-y-6">
+          {results.length === 0 && !loading && (
+            <div className="glass rounded-2xl p-16 text-center" data-testid="pod-empty">
+              <Sparkles className="w-12 h-12 mx-auto text-[var(--subtle)] mb-4" />
+              <p className="text-[var(--muted)]">Upload artwork and hit analyse to see your product portfolio here.</p>
+            </div>
+          )}
+
+          {results.length > 0 && (
+            <>
+              <div className="glass rounded-2xl p-4 flex items-center justify-between flex-wrap gap-3" data-testid="pod-actions-bar">
+                <div className="font-mono text-xs uppercase tracking-widest text-[var(--muted)]">
+                  <span className="text-white text-base font-bold">{approvedCount}</span>
+                  <span className="mx-1">/</span>
+                  {totalProducts} approved
+                </div>
+                <div className="flex gap-2 flex-wrap">
+                  <Button size="sm" variant="outline" onClick={approveAll} className="bg-white/5 border-white/10" data-testid="pod-approve-all">
+                    <Check className="w-3.5 h-3.5 mr-1" /> Approve All
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={clearAll} className="bg-white/5 border-white/10" data-testid="pod-clear-all">
+                    <X className="w-3.5 h-3.5 mr-1" /> Clear
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={exportCSV} className="bg-white/5 border-white/10" data-testid="pod-export-csv">
+                    <Download className="w-3.5 h-3.5 mr-1" /> CSV
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={exportJSON} className="bg-white/5 border-white/10" data-testid="pod-export-json">
+                    <Download className="w-3.5 h-3.5 mr-1" /> JSON
+                  </Button>
+                </div>
+              </div>
+
+              {results.map((r, ri) => (
+                <ResultCard
+                  key={ri}
+                  result={r}
+                  rIdx={ri}
+                  approved={approved}
+                  toggle={toggleApproved}
+                  copy={copyToClipboard}
+                />
+              ))}
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ResultCard({ result, rIdx, approved, toggle, copy }) {
+  if (result.error) {
+    return (
+      <div className="glass rounded-2xl p-6 border-red-500/30 bg-red-500/5">
+        <div className="font-mono text-xs uppercase tracking-widest text-red-400 mb-1">Failed</div>
+        <div className="text-sm">{result.image.name}</div>
+        <div className="text-xs text-[var(--muted)] mt-2">{result.error}</div>
+      </div>
+    );
+  }
+
+  const d = result.data;
+  const potClass = d.marketPotential === "hot" ? "bg-red-500/15 text-red-300 border-red-500/30"
+    : d.marketPotential === "strong" ? "bg-amber-500/15 text-amber-300 border-amber-500/30"
+    : "bg-emerald-500/15 text-emerald-300 border-emerald-500/30";
+
+  return (
+    <div className="glass rounded-2xl p-6 fade-up" data-testid={`result-card-${rIdx}`}>
+      <div className="flex gap-4 mb-5">
+        <img src={result.image.src} alt={result.image.name} className="w-24 h-24 rounded-xl object-cover border border-white/10 shrink-0" />
+        <div className="flex-1 min-w-0">
+          <div className="flex flex-wrap items-center gap-2 mb-1">
+            <h3 className="font-display text-lg font-bold truncate">{result.image.name}</h3>
+            <span className={`text-[10px] font-mono uppercase tracking-widest px-2 py-0.5 rounded-full border ${potClass}`}>
+              {d.marketPotential}
+            </span>
+            <span className="text-[10px] font-mono uppercase tracking-widest text-[var(--muted)] border border-white/10 px-2 py-0.5 rounded-full">
+              Type {d.artworkType}
+            </span>
+          </div>
+          <p className="text-sm text-[var(--muted)] leading-relaxed">{d.artworkDescription}</p>
+          <p className="text-xs text-[var(--subtle)] mt-2 italic">{d.marketPotentialReason}</p>
+        </div>
+      </div>
+
+      {/* Product table */}
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-xs font-mono uppercase tracking-widest text-[var(--muted)] border-b border-white/10">
+              <th className="text-left py-2 px-2 w-8"></th>
+              <th className="text-left py-2 px-2">Product</th>
+              <th className="text-right py-2 px-2">Base</th>
+              <th className="text-right py-2 px-2">Retail</th>
+              <th className="text-right py-2 px-2">Margin</th>
+              <th className="text-left py-2 px-2 hidden md:table-cell">Variants</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(d.recommendedProducts || []).map((p, pi) => {
+              const k = `${rIdx}-${pi}`;
+              const isApproved = !!approved[k];
+              return (
+                <tr key={pi} className="border-b border-white/5 hover:bg-white/5">
+                  <td className="py-2 px-2">
+                    <button
+                      onClick={() => toggle(rIdx, pi)}
+                      data-testid={`product-approve-${rIdx}-${pi}`}
+                      className={`w-6 h-6 rounded-full border transition-all flex items-center justify-center ${isApproved ? "bg-[var(--raven)] border-[var(--raven)]" : "border-white/20 hover:border-white/50"}`}
+                    >
+                      {isApproved && <Check className="w-3 h-3 text-white" />}
+                    </button>
+                  </td>
+                  <td className="py-2 px-2">
+                    <div className="font-medium">{p.product}</div>
+                    <div className="text-xs text-[var(--muted)] leading-tight mt-0.5">{p.whySuited}</div>
+                  </td>
+                  <td className="py-2 px-2 text-right font-mono text-xs">${p.baseCostUSD}</td>
+                  <td className="py-2 px-2 text-right font-mono text-xs text-[var(--raven-glow)]">${p.suggestedRetailUSD}</td>
+                  <td className="py-2 px-2 text-right font-mono text-xs text-emerald-400">{p.profitMarginPct}%</td>
+                  <td className="py-2 px-2 text-xs text-[var(--muted)] hidden md:table-cell">{p.variants}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      {/* SEO blocks */}
+      <div className="mt-6 grid md:grid-cols-2 gap-4">
+        <SeoBlock label="SEO Title" value={d.seoTitle} onCopy={() => copy(d.seoTitle, "SEO title")} />
+        <SeoBlock label="Keywords" value={(d.keywords || []).join(", ")} onCopy={() => copy((d.keywords || []).join(", "), "Keywords")} />
+        <div className="md:col-span-2">
+          <SeoBlock label="SEO Description" value={d.seoDescription} onCopy={() => copy(d.seoDescription, "Description")} multiline />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SeoBlock({ label, value, onCopy, multiline }) {
+  return (
+    <div className="rounded-xl bg-black/30 border border-white/10 p-3">
+      <div className="flex items-center justify-between mb-1.5">
+        <span className="text-[10px] font-mono uppercase tracking-widest text-[var(--gold)]">{label}</span>
+        <button onClick={onCopy} className="text-xs text-[var(--muted)] hover:text-white flex items-center gap-1">
+          <Copy className="w-3 h-3" />
+        </button>
+      </div>
+      <div className={`font-mono text-xs text-[var(--text)] ${multiline ? "" : "truncate"}`}>{value}</div>
+    </div>
+  );
+}
