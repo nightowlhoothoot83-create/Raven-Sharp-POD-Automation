@@ -21,6 +21,9 @@ export default function TopNav() {
   }, []);
 
   const isActive = (path) => location.pathname === path;
+  const displayName = typeof user?.name === "string" && user.name.trim() ? user.name.trim() : "";
+  const displayEmail = typeof user?.email === "string" ? user.email : "";
+  const displayTier = typeof user?.tier === "string" && user.tier ? user.tier : "free";
 
   const NAV_LINKS = user ? [
     { to: "/dashboard",   icon: <LayoutDashboard className="w-4 h-4" />, label: "Dashboard" },
@@ -91,14 +94,14 @@ export default function TopNav() {
                   className="flex items-center gap-2 px-3 py-2 rounded-xl bg-white/5 border border-white/10 hover:bg-white/10 transition-all"
                 >
                   <div className="w-7 h-7 rounded-full bg-[var(--raven)]/30 border border-[var(--raven)]/40 flex items-center justify-center text-xs font-bold text-[var(--raven-glow)]">
-                    {user.name?.[0]?.toUpperCase() || user.email?.[0]?.toUpperCase()}
+                    {displayName[0]?.toUpperCase() || displayEmail[0]?.toUpperCase() || "A"}
                   </div>
                   <div className="hidden sm:block text-left">
                     <div className="text-xs font-medium text-[var(--text)] leading-none">
-                      {user.name?.split(" ")[0] || "Account"}
+                      {displayName.split(/\s+/)[0] || "Account"}
                     </div>
-                    <div className={`text-[10px] font-mono uppercase tracking-wider leading-none mt-0.5 ${TIER_COLORS[user.tier] || ""}`}>
-                      {user.tier}
+                    <div className={`text-[10px] font-mono uppercase tracking-wider leading-none mt-0.5 ${TIER_COLORS[displayTier] || ""}`}>
+                      {displayTier}
                     </div>
                   </div>
                   <ChevronDown className={`w-3.5 h-3.5 text-[var(--muted)] transition-transform ${userMenuOpen ? "rotate-180" : ""}`} />

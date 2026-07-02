@@ -799,9 +799,8 @@ async def _process_pipeline_images(run_id: str, user_id: str, images_payload, pl
                                {"$inc": {"pipeline_runs_used": 1}})
 
 
-@api.post("/pipeline/run")
-async def run_pipeline(payload: PipelineRunIn, background_tasks: BackgroundTasks,
-                        user: dict = Depends(get_user)):
+async def create_pipeline_run(payload: PipelineRunIn, background_tasks: BackgroundTasks,
+                              user: dict):
     """Kicks off the pipeline and returns immediately with a run_id.
     Processing continues in the background — poll GET /pipeline/runs/{run_id}
     for live progress. This means closing the browser tab or a slow connection
@@ -833,6 +832,16 @@ async def run_pipeline(payload: PipelineRunIn, background_tasks: BackgroundTasks
     )
 
     return {"run_id": run_id, "status": "processing", "total": len(payload.images)}
+
+@api.post("/pipeline/run")
+async def run_pipeline(payload: PipelineRunIn, background_tasks: BackgroundTasks,
+                       user: dict = Depends(get_user)):
+    return await create_pipeline_run(payload, background_tasks, user)
+
+@api.post("/pipeline/runs")
+async def run_pipeline_plural(payload: PipelineRunIn, background_tasks: BackgroundTasks,
+                              user: dict = Depends(get_user)):
+    return await create_pipeline_run(payload, background_tasks, user)
 
 @api.get("/pipeline/runs")
 async def list_runs(user: dict = Depends(get_user)):

@@ -14,21 +14,59 @@ const TIER_LIMITS = {
 };
 
 function UsageBar({ used, max, label, color = "var(--raven)" }) {
-  const pct = max >= 9999 ? 0 : Math.min((used / max) * 100, 100);
+  const safeUsed = Number.isFinite(Number(used)) ? Number(used) : 0;
+  const safeMax = Number.isFinite(Number(max)) && Number(max) > 0 ? Number(max) : 0;
+  const pct = safeMax >= 9999 || safeMax === 0 ? 0 : Math.min((safeUsed / safeMax) * 100, 100);
   return (
     <div>
       <div className="flex justify-between text-xs mb-1.5">
         <span className="text-[var(--muted)]">{label}</span>
         <span className="font-mono text-[var(--text)]">
-          {max >= 9999 ? "∞" : `${used} / ${max}`}
+          {safeMax >= 9999 ? "∞" : `${safeUsed} / ${safeMax}`}
         </span>
       </div>
       <div className="h-1.5 bg-white/10 rounded-full overflow-hidden">
         <div className="h-full rounded-full transition-all duration-700"
-          style={{ width: `${max >= 9999 ? 20 : pct}%`, background: `linear-gradient(90deg, ${color}, ${color}aa)` }} />
+          style={{ width: `${safeMax >= 9999 ? 20 : pct}%`, background: `linear-gradient(90deg, ${color}, ${color}aa)` }} />
       </div>
     </div>
   );
+}
+
+function cleanRuns(data) {
+  return Array.isArray(data) ? data.filter(run => run && typeof run === "object") : [];
+}
+
+function firstName(value) {
+  return typeof value === "string" && value.trim() ? value.trim().split(/\s+/)[0] : "";
+}
+
+function cleanTier(value) {
+  return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : "free";
+}
+
+function runStatus(run) {
+  return typeof run?.status === "string" && run.status ? run.status : "processing";
+}
+
+function runPlatform(run) {
+  return typeof run?.platform === "string" && run.platform ? run.platform : "pipeline";
+}
+
+function runTotal(run) {
+  const total = Number(run?.total_count);
+  if (Number.isFinite(total) && total >= 0) return total;
+  return Array.isArray(run?.results) ? run.results.length : 0;
+}
+
+function runResultCount(run) {
+  return Array.isArray(run?.results) ? run.results.length : 0;
+}
+
+function runDate(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Date unavailable";
+  return date.toLocaleDateString("en-AU", { day:"numeric", month:"short", year:"numeric", hour:"2-digit", minute:"2-digit" });
 }
 
 export default function Dashboard() {
@@ -39,7 +77,7 @@ export default function Dashboard() {
   useEffect(() => {
     api.get("/pipeline/runs")
       .then(({ data }) => {
-        setRuns(Array.isArray(data) ? data : []);
+        setRuns(cleanRuns(data));
       })
       .catch((err) => {
         console.error("Failed to load pipeline runs:", err);
@@ -48,10 +86,10 @@ export default function Dashboard() {
       .finally(() => setLoading(false));
   }, []);
 
-  const tier = user?.tier || "free";
+  const tier = cleanTier(user?.tier);
   const limits = TIER_LIMITS[tier] || TIER_LIMITS.free;
-  const runsUsed = user?.pipeline_runs_used || 0;
-  const genUsed  = user?.ai_gen_credits_used || 0;
+  const runsUsed = Number.isFinite(Number(user?.pipeline_runs_used)) ? Number(user?.pipeline_runs_used) : 0;
+  const genUsed  = Number.isFinite(Number(user?.ai_gen_credits_used)) ? Number(user?.ai_gen_credits_used) : 0;
 
   const TIER_COLORS = { free:"var(--muted)", creator:"var(--raven-glow)", pro:"var(--gold)", agency:"#34d399", owner:"#f87171" };
 
@@ -64,7 +102,7 @@ export default function Dashboard() {
           <div>
             <span className="text-xs font-mono uppercase tracking-[0.25em] text-[var(--gold)]">Dashboard</span>
             <h1 className="font-display text-4xl sm:text-5xl font-black tracking-tighter mt-1">
-              Welcome back{user?.name ? `, ${user.name.split(" ")[0]}` : ""}
+              Welcome back{firstName(user?.name) ? `, ${firstName(user.name)}` : ""}
             </h1>
           </div>
           <Link to="/pipeline"
@@ -147,37 +185,44 @@ export default function Dashboard() {
             </div>
           ) : (
             <div className="divide-y divide-white/5">
-              {runs.slice(0, 10).map(run => (
-                <Link key={run.id}
-                  to={["in_progress", "processing"].includes(run.status) ? `/pipeline/${run.id}` : `/review/${run.id}`}
+              {runs.slice(0, 10).map((run, index) => {
+                const id = run?.id || run?._id || `saved-run-${index}`;
+                const status = runStatus(run);
+                const total = runTotal(run);
+                const canResume = ["in_progress", "processing"].includes(status);
+
+                return (
+                <Link key={id}
+                  to={canResume && run?.id ? `/pipeline/${run.id}` : run?.id ? `/review/${run.id}` : "/pipeline"}
                   className="flex items-center gap-4 px-6 py-4 hover:bg-white/3 transition-colors group">
                   <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${
-                    run.status === "completed" ? "bg-emerald-500/15 text-emerald-400"
-                      : run.status === "pending_review" ? "bg-amber-500/15 text-amber-400"
+                    status === "completed" ? "bg-emerald-500/15 text-emerald-400"
+                      : status === "pending_review" ? "bg-amber-500/15 text-amber-400"
                       : "bg-white/10 text-[var(--muted)]"
                   }`}>
-                    {run.status === "completed" ? <Check className="w-4 h-4" /> : <Clock className="w-4 h-4" />}
+                    {status === "completed" ? <Check className="w-4 h-4" /> : <Clock className="w-4 h-4" />}
                   </div>
                   <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium capitalize">{run.platform} · {run.total_count} image{run.total_count !== 1 ? "s" : ""}</div>
+                    <div className="text-sm font-medium capitalize">{runPlatform(run)} · {total} image{total !== 1 ? "s" : ""}</div>
                     <div className="text-xs text-[var(--muted)]">
-                      {new Date(run.created_at).toLocaleDateString("en-AU", { day:"numeric", month:"short", year:"numeric", hour:"2-digit", minute:"2-digit" })}
+                      {runDate(run?.created_at)}
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
                     <span className={`text-xs px-2 py-1 rounded-full ${
-                      run.status === "completed" ? "bg-emerald-500/10 text-emerald-400"
-                        : run.status === "in_progress" ? "bg-sky-500/10 text-sky-400"
+                      status === "completed" ? "bg-emerald-500/10 text-emerald-400"
+                        : canResume ? "bg-sky-500/10 text-sky-400"
                         : "bg-amber-500/10 text-amber-400"
                     }`}>
-                      {run.status === "completed" ? "Published"
-                        : run.status === "in_progress" ? `Resume · ${(run.results || []).length}/${run.total_count}`
+                      {status === "completed" ? "Published"
+                        : canResume ? `Resume · ${runResultCount(run)}/${total}`
                         : "Review"}
                     </span>
                     <ChevronRight className="w-4 h-4 text-[var(--subtle)] group-hover:text-[var(--muted)] transition-colors" />
                   </div>
                 </Link>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
