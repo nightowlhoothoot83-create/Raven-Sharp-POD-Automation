@@ -37,7 +37,15 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    api.get("/pipeline/runs").then(({ data }) => setRuns(data)).catch(() => {}).finally(() => setLoading(false));
+    api.get("/pipeline/runs")
+      .then(({ data }) => {
+        setRuns(Array.isArray(data) ? data : []);
+      })
+      .catch((err) => {
+        console.error("Failed to load pipeline runs:", err);
+        setRuns([]);
+      })
+      .finally(() => setLoading(false));
   }, []);
 
   const tier = user?.tier || "free";
