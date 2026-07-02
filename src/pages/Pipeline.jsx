@@ -53,6 +53,7 @@ export default function Pipeline() {
   const navigate = useNavigate();
   const { runId: resumeRunId } = useParams();
   const fileRef = useRef(null);
+  const pollTimerRef = useRef(null);
 
   const [step, setStep] = useState(1); // 1=platform, 2=upload, 3=settings, 4=running
   const [selectedPlatform, setSelectedPlatform] = useState(null);
@@ -69,6 +70,10 @@ export default function Pipeline() {
   const [resuming, setResuming] = useState(!!resumeRunId);
   const [connectedPlatforms, setConnectedPlatforms] = useState([]);
   const [platformsLoading, setPlatformsLoading] = useState(true);
+
+  useEffect(() => () => {
+    if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
+  }, []);
 
   // ── Fetch connected platforms on mount ────────────────────────────────────
   useEffect(() => {
@@ -90,7 +95,7 @@ export default function Pipeline() {
         setStep(4);
         setRunning(true);
         setResuming(false);
-        processNext(data.id, data.total_count, (data.results || []).length);
+        pollRun(data.id);
       } catch (err) {
         toast.error("Could not load that run to resume");
         setResuming(false);
@@ -133,21 +138,27 @@ export default function Pipeline() {
   const removeImage = (id) => setImages(prev => prev.filter(i => i.id !== id));
 
   // ── Process one image at a time with save-point after each ────────────────
-  const processNext = async (rid, runTotal, alreadyDone) => {
+  const pollRun = async (rid, runTotal = total, alreadyDone = completed.length) => {
     setProgress({ step: `Processing image ${alreadyDone + 1} of ${runTotal}...`, pct: Math.round((alreadyDone / runTotal) * 100) });
     try {
-      const { data } = await api.post(`/pipeline/runs/${rid}/process-next`);
-      if (data.result) {
-        setCompleted(prev => [...prev, data.result]);
-        setLastPreview(data.result);
-      }
-      if (data.done) {
+      const { data } = await api.get(`/pipeline/runs/${rid}`);
+      const results = data.results || [];
+      const savedTotal = data.total_count || runTotal || results.length;
+      const pct = savedTotal ? Math.round((results.length / savedTotal) * 100) : 0;
+      setTotal(savedTotal);
+      setCompleted(results);
+      setLastPreview(results[results.length - 1] || null);
+
+      if (["pending_review", "completed"].includes(data.status) || results.length >= savedTotal) {
         setProgress({ step: "All images processed! Redirecting to review...", pct: 100 });
         toast.success(`Pipeline complete — ${data.processed} listing${data.processed !== 1 ? "s" : ""} ready for review`);
         setTimeout(() => navigate(`/review/${rid}`), 800);
         return;
       }
-      setAwaitingContinue(true);
+      setAwaitingContinue(false);
+      setProgress({ step: `Processing image ${Math.min(results.length + 1, savedTotal)} of ${savedTotal}...`, pct });
+      pollTimerRef.current = setTimeout(() => pollRun(rid, savedTotal, results.length), 5000);
+      return;
       setProgress({ step: `Image ${data.processed} of ${data.total} ready — review the preview`, pct: Math.round((data.processed / data.total) * 100) });
     } catch (err) {
       toast.error(err.response?.data?.detail || err.message);
@@ -157,7 +168,7 @@ export default function Pipeline() {
 
   const continueToNext = () => {
     setAwaitingContinue(false);
-    processNext(runId, total, completed.length);
+    pollRun(runId, total, completed.length);
   };
 
   const pauseRun = () => {
@@ -188,7 +199,7 @@ export default function Pipeline() {
       setRunId(data.run_id);
       setTotal(data.total);
       setCompleted([]);
-      processNext(data.run_id, data.total, 0);
+      pollRun(data.run_id, data.total, 0);
 
     } catch (err) {
       toast.error(err.response?.data?.detail || err.message);
@@ -647,6 +658,12 @@ export default function Pipeline() {
                         Looks good — Continue <ChevronRight className="w-4 h-4" />
                       </button>
                     </div>
+                  )}
+                  {!awaitingContinue && running && runId && (
+                    <button onClick={pauseRun}
+                      className="px-5 py-2.5 rounded-xl text-sm font-semibold border border-white/15 text-[var(--muted)] hover:text-[var(--text)] hover:border-white/30 transition-all">
+                      Save &amp; Continue Later
+                    </button>
                   )}
                 </>
               )}
