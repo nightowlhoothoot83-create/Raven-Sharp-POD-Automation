@@ -155,7 +155,7 @@ export default function Pipeline() {
   const removeImage = (id) => setImages(prev => prev.filter(i => i.id !== id));
 
   // ── Process one image at a time with save-point after each ────────────────
-  const pollRun = async (rid, runTotal = total, alreadyDone = completed.length) => {
+  const pollRun = async (rid, runTotal = total, alreadyDone = completed.length, retryCount = 0) => {
     setProgress({ step: `Processing image ${alreadyDone + 1} of ${runTotal}...`, pct: Math.round((alreadyDone / runTotal) * 100) });
     try {
       const { data } = await api.get(`/pipeline/runs/${rid}`);
@@ -178,8 +178,22 @@ export default function Pipeline() {
       return;
       setProgress({ step: `Image ${data.processed} of ${data.total} ready — review the preview`, pct: Math.round((data.processed / data.total) * 100) });
     } catch (err) {
+      if (err.response?.status === 404 && retryCount < 3) {
+        setProgress({ step: "Waiting for saved run...", pct: Math.max(2, Math.round((alreadyDone / runTotal) * 100)) });
+        pollTimerRef.current = setTimeout(() => pollRun(rid, runTotal, alreadyDone, retryCount + 1), 1500);
+        return;
+      }
       toast.error(err.response?.data?.detail || err.message);
       setRunning(false);
+    }
+  };
+
+  const createRun = async (payload) => {
+    try {
+      return await api.post("/pipeline/run", payload);
+    } catch (err) {
+      if (err.response?.status !== 404) throw err;
+      return api.post("/pipeline/runs", payload);
     }
   };
 
@@ -212,11 +226,15 @@ export default function Pipeline() {
         })),
       };
 
-      const { data } = await api.post("/pipeline/run", payload);
-      setRunId(data.run_id);
-      setTotal(data.total);
+      const { data } = await createRun(payload);
+      const createdRunId = data.run_id || data.id;
+      const createdTotal = data.total || data.total_count || images.length;
+      if (!createdRunId) throw new Error("Pipeline started but no run ID was returned");
+
+      setRunId(createdRunId);
+      setTotal(createdTotal);
       setCompleted([]);
-      pollRun(data.run_id, data.total, 0);
+      pollRun(createdRunId, createdTotal, 0);
 
     } catch (err) {
       toast.error(err.response?.data?.detail || err.message);
