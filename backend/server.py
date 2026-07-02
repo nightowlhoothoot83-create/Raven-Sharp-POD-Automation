@@ -4,7 +4,7 @@ Full autonomous POD pipeline with AI upscaling, image gen, multi-platform push
 Part of Ascension Digital Group
 """
 from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depends, UploadFile, File, Form, BackgroundTasks
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pymongo import AsyncMongoClient as AsyncIOMotorClient
 from pydantic import BaseModel, Field
@@ -125,6 +125,9 @@ class PlatformKeyIn(BaseModel):
     platform: str
     api_key: str
     store_id: Optional[str] = None
+
+class PlatformDisconnectIn(BaseModel):
+    platform: str
 
 class StyleProfileIn(BaseModel):
     name: str
@@ -291,16 +294,42 @@ async def refresh_token(request: Request, response: Response):
 # ── Platform keys ─────────────────────────────────────────────────────────────
 @api.post("/account/platform-key")
 async def save_platform_key(payload: PlatformKeyIn, user: dict = Depends(get_user)):
+    if payload.platform not in PLATFORMS:
+        raise HTTPException(400, "Unknown platform")
+    if PLATFORMS[payload.platform]["auth"] == "oauth2":
+        raise HTTPException(400, "Use the platform connect button instead")
     update = {f"platform_keys.{payload.platform}": payload.api_key}
     if payload.store_id:
         update[f"platform_store_ids.{payload.platform}"] = payload.store_id
     await db.users.update_one({"id": user["id"]}, {"$set": update})
     return {"ok": True, "platform": payload.platform}
 
+@api.post("/account/platform-disconnect")
+async def disconnect_platform(payload: PlatformDisconnectIn, user: dict = Depends(get_user)):
+    if payload.platform not in PLATFORMS:
+        raise HTTPException(400, "Unknown platform")
+    unset = {
+        f"platform_keys.{payload.platform}": "",
+        f"platform_store_ids.{payload.platform}": "",
+    }
+    if payload.platform == "etsy":
+        unset.update({
+            "etsy_access_token": "",
+            "etsy_refresh_token": "",
+            "etsy_code_verifier": "",
+            "etsy_oauth_state": "",
+        })
+    await db.users.update_one({"id": user["id"]}, {"$unset": unset})
+    return {"ok": True, "platform": payload.platform}
+
 @api.get("/account/platforms")
 async def get_platforms(user: dict = Depends(get_user)):
     keys = user.get("platform_keys", {})
-    return {"connected": list(keys.keys()), "available": PLATFORMS}
+    return {
+        "connected": list(keys.keys()),
+        "stores": user.get("platform_store_ids", {}),
+        "available": PLATFORMS,
+    }
 
 # ── Style profiles ────────────────────────────────────────────────────────────
 @api.post("/style-profiles")
@@ -985,8 +1014,7 @@ async def etsy_callback(code: str, state: str):
                   "platform_keys.etsy": "connected"},
          "$unset": {"etsy_code_verifier": "", "etsy_oauth_state": ""}})
     frontend = os.environ.get('FRONTEND_URL', 'http://localhost:3000')
-    return {"message": "Etsy connected!", "shop_id": shop_id,
-            "redirect": f"{frontend}/account?etsy=connected"}
+    return RedirectResponse(f"{frontend}/account?etsy=connected")
 
 # ── Gelato Template IDs ───────────────────────────────────────────────────────
 @api.post("/account/gelato-templates")
