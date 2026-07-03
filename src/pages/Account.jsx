@@ -208,7 +208,8 @@ function PlatformRow({
                 <a
                   href={PLATFORM_DOCS[id]}
                   target="_blank"
-                  rel="noreferrer"
+                  rel="noopener noreferrer"
+                  aria-label="Get API key (opens in new tab)"
                   className="ml-2 text-[var(--raven-glow)] hover:underline inline-flex items-center gap-1"
                 >
                   Get token <ExternalLink className="w-3 h-3" />

@@ -17,7 +17,7 @@ api.interceptors.response.use(
       err.config._retry = true;
       try {
         // Use the api instance (not raw axios) so the correct baseURL is used
-        await api.post("/auth/refresh", {}, { withCredentials: true });
+        await api.post("/auth/refresh", {});
         return api(err.config);
       } catch {
         // Only redirect if NOT already on the login page (prevents infinite reload loop)

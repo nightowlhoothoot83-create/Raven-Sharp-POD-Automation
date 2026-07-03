@@ -2,13 +2,12 @@ import React from "react";
 import { Link } from "react-router-dom";
 
 const BRANDS = [
-  { name: "Mystical Moments",  logo: "/brands/mysticalMoments.png",  url: "https://mystical-moments.net", desc: "Photography" },
-  { name: "Zyia Creations",    logo: "/brands/zyiaCreations.png",     url: "https://www.etsy.com/shop/ZyiaCreations", desc: "Digital Art" },
+  { name: "Mystical Moments",  logo: "/brands/mysticalMoments.png",  url: "#",                            desc: "Photography" },
+  { name: "Zyia Creations",    logo: "/brands/zyiaCreations.png",     url: "#",                            desc: "Digital Art" },
   { name: "Spew Crew Kids",    logo: "/brands/spewCrew.png",          url: "https://youtube.com/@spewcrewkids", desc: "Kids Content" },
-  { name: "Feed The Feed",     logo: "/brands/feedTheFeed.png",       url: "https://www.facebook.com/feedthefeed", desc: "Social Media" },
+  { name: "Feed The Feed",     logo: "/brands/feedTheFeed.png",       url: "#",                            desc: "Social Media" },
   { name: "MyCalTools",        logo: "/brands/myCalTools.png",        url: "https://mycalctools.net",      desc: "Calculator Tools" },
   { name: "MyCalendarTools",   logo: "/brands/myCalendarTools.png",   url: "https://mycalendartools.net",  desc: "Calendar Tools" },
-  { name: "Wheel Name Picker", logo: "/brands/wheelNamePicker.png",   url: "https://wheelnamepicker.com.au", desc: "Free Wheel Spinner" },
 ];
 
 const LEGAL_LINKS = [
@@ -46,7 +45,8 @@ export default function ADGFooter() {
                 key={brand.name}
                 href={brand.url}
                 target={brand.url.startsWith("http") ? "_blank" : "_self"}
-                rel="noreferrer"
+                rel="noopener noreferrer"
+                aria-label={brand.url.startsWith("http") ? `${brand.name} (opens in new tab)` : brand.name}
                 className="group flex flex-col items-center gap-2 opacity-60 hover:opacity-100 transition-all duration-300"
                 title={brand.name}
               >
@@ -88,7 +88,6 @@ export default function ADGFooter() {
             <h4 className="text-xs font-mono uppercase tracking-widest text-[var(--muted)] mb-3">Company</h4>
             <ul className="space-y-2">
               <li><a href="https://ascensiondigitalgroup.com" className="text-[var(--subtle)] hover:text-[var(--text)] transition-colors">Ascension Digital</a></li>
-              <li><Link to="/about" className="text-[var(--subtle)] hover:text-[var(--text)] transition-colors">About</Link></li>
               <li><a href="mailto:ascensiondigitalagency@outlook.com" className="text-[var(--subtle)] hover:text-[var(--text)] transition-colors">Contact Us</a></li>
             </ul>
           </div>
@@ -114,11 +113,4 @@ export default function ADGFooter() {
           </div>
           <div className="flex flex-col sm:flex-row items-center gap-3 text-center">
             <span>© {new Date().getFullYear()} Ascension Digital Group. All rights reserved.</span>
-            <span className="hidden sm:block">·</span>
-            <span>Queensland, Australia</span>
-          </div>
-        </div>
-      </div>
-    </footer>
-  );
-}
+            <span className="hidden sm:block">·</sp
