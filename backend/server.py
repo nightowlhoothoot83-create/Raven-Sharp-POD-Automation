@@ -858,6 +858,17 @@ async def get_run(run_id: str, user: dict = Depends(get_user)):
     if not run: raise HTTPException(404, "Run not found")
     return run
 
+@api.post("/pipeline/runs/{run_id}/process-next")
+async def process_next_compat(run_id: str, user: dict = Depends(get_user)):
+    """Compatibility endpoint for older frontend bundles.
+    Runs are processed by the background worker now, so this simply returns
+    the latest saved run state instead of failing with 404."""
+    run = await db.pipeline_runs.find_one(
+        {"id": run_id, "user_id": user["id"]},
+        {"_id": 0, "results.upscaled_b64": 0})
+    if not run: raise HTTPException(404, "Run not found")
+    return run
+
 # ── Regenerate copy for single listing ───────────────────────────────────────
 @api.post("/pipeline/runs/{run_id}/listings/{listing_id}/regenerate")
 async def regenerate_copy(run_id: str, listing_id: str,
