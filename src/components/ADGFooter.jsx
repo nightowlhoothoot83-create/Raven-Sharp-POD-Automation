@@ -113,4 +113,10 @@ export default function ADGFooter() {
           </div>
           <div className="flex flex-col sm:flex-row items-center gap-3 text-center">
             <span>© {new Date().getFullYear()} Ascension Digital Group. All rights reserved.</span>
-            <span className="hidden sm:block">·</sp
+            <span className="hidden sm:block">·</span>
+          </div>
+        </div>
+      </div>
+    </footer>
+  );
+}
