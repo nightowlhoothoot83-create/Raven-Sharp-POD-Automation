@@ -640,41 +640,44 @@ async def true_upscale(image_base64: str, mime: str, scale: int = 4) -> str:
 
 # ── Pipeline ──────────────────────────────────────────────────────────────────
 async def upload_to_r2(image_base64: str, filename: str, mime: str = "image/png") -> str:
-    """Upload image to Cloudflare R2 for public URL (replaces imgbb)"""
-    if not R2_ENDPOINT or not R2_ACCESS_KEY: 
-        log.warning("R2 not configured — image URL will be empty")
+    """Upload image to Cloudflare R2 using boto3 with proper AWS SigV4 auth."""
+    if not R2_ENDPOINT or not R2_ACCESS_KEY or not R2_SECRET_KEY:
+        log.warning("R2 not fully configured — skipping upload, public_url will be empty")
         return ""
-    import hashlib, hmac, base64 as b64mod
-    from datetime import datetime, timezone
-    
-    image_bytes = base64.b64decode(image_base64)
-    key = f"pod-images/{filename}"
-    url = f"{R2_ENDPOINT}/{R2_BUCKET}/{key}"
-    
-    # AWS Signature v4 for R2
-    now = datetime.now(timezone.utc)
-    datestamp = now.strftime("%Y%m%d")
-    amzdate   = now.strftime("%Y%m%dT%H%M%SZ")
-    
-    headers = {
-        "Content-Type": mime,
-        "x-amz-date": amzdate,
-        "x-amz-content-sha256": hashlib.sha256(image_bytes).hexdigest(),
-    }
-    
-    async with httpx.AsyncClient(timeout=60) as c:
-        try:
-            # Simple PUT to R2 with pre-signed style headers
-            res = await c.put(url, content=image_bytes, headers={
-                **headers,
-                "Authorization": f"Bearer {R2_ACCESS_KEY}",  # simplified — use boto3 in production for full SigV4
-            })
-            if res.status_code in [200, 201]:
-                return url
-            log.error(f"R2 upload failed: {res.status_code} {res.text[:200]}")
-        except Exception as e:
-            log.error(f"R2 upload error: {e}")
-    return ""
+    try:
+        import boto3
+        from botocore.config import Config
+        import io
+
+        image_bytes = base64.b64decode(image_base64)
+        key = f"pod-images/{filename}"
+
+        s3 = boto3.client(
+            "s3",
+            endpoint_url=R2_ENDPOINT,
+            aws_access_key_id=R2_ACCESS_KEY,
+            aws_secret_access_key=R2_SECRET_KEY,
+            config=Config(signature_version="s3v4"),
+            region_name="auto",
+        )
+
+        s3.upload_fileobj(
+            io.BytesIO(image_bytes),
+            R2_BUCKET,
+            key,
+            ExtraArgs={"ContentType": mime, "ACL": "public-read"},
+        )
+
+        # Return the public URL
+        # If R2 has a custom domain configured, use R2_PUBLIC_URL env var
+        public_base = os.environ.get("R2_PUBLIC_URL", f"{R2_ENDPOINT}/{R2_BUCKET}")
+        public_url = f"{public_base.rstrip('/')}/{key}"
+        log.info(f"R2 upload success: {public_url}")
+        return public_url
+
+    except Exception as e:
+        log.error(f"R2 upload error: {e}")
+        return ""
 
 async def analyse_with_claude(image_base64: str, mime: str, platform: str,
                                market: str, price_tier: str) -> dict:
