@@ -6,7 +6,7 @@ Part of Ascension Digital Group
 from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depends, UploadFile, File, Form, BackgroundTasks
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
-from pymongo import AsyncMongoClient as AsyncIOMotorClient
+from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timezone, timedelta
@@ -1181,6 +1181,75 @@ async def admin_stats(user: dict = Depends(get_user)):
             "users_by_tier": by_tier}
 
 # Health
+
+@api.get("/health/detailed")
+async def health_detailed():
+    """Detailed health check for monitoring dashboard."""
+    checks = {}
+    
+    # MongoDB check
+    try:
+        await db.command("ping")
+        checks["mongodb"] = {"status": "ok"}
+    except Exception as e:
+        checks["mongodb"] = {"status": "error", "detail": str(e)}
+    
+    # Replicate check
+    try:
+        async with httpx.AsyncClient(timeout=10) as c:
+            r = await c.get(
+                "https://api.replicate.com/v1/account",
+                headers={"Authorization": f"Token {REPLICATE_KEY}"}
+            )
+            checks["replicate"] = {"status": "ok" if r.status_code == 200 else "error"}
+    except Exception as e:
+        checks["replicate"] = {"status": "error", "detail": str(e)}
+
+    # Gemini/Google AI check
+    checks["gemini"] = {"status": "ok" if os.environ.get("GOOGLE_AI_KEY") else "not_configured"}
+    
+    # Stripe check
+    checks["stripe"] = {"status": "ok" if STRIPE_KEY else "not_configured"}
+    
+    # Claude check
+    checks["claude"] = {"status": "ok" if os.environ.get("ANTHROPIC_API_KEY") else "not_configured"}
+    
+    # R2/Storage check
+    checks["r2_storage"] = {"status": "ok" if os.environ.get("R2_BUCKET") else "not_configured"}
+    
+    overall = "ok" if all(v["status"] in ("ok", "not_configured") for v in checks.values()) else "degraded"
+    return {
+        "status": overall,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "services": checks
+    }
+
+@api.get("/health/stats")
+async def health_stats(user: dict = Depends(get_user)):
+    """Usage stats for owner dashboard."""
+    if user.get("tier") not in ("owner", "admin"):
+        raise HTTPException(403, "Owner only")
+    
+    total_users = await db.users.count_documents({})
+    total_pipelines = await db.pipeline_runs.count_documents({})
+    
+    pipeline_agg = [{"$group": {"_id": "$status", "count": {"$sum": 1}}}]
+    status_cursor = db.pipeline_runs.aggregate(pipeline_agg)
+    statuses = {}
+    async for doc in status_cursor:
+        statuses[doc["_id"]] = doc["count"]
+    
+    today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+    runs_today = await db.pipeline_runs.count_documents({"created_at": {"$gte": today}})
+    
+    return {
+        "total_users": total_users,
+        "total_pipeline_runs": total_pipelines,
+        "runs_today": runs_today,
+        "runs_by_status": statuses,
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }
+
 @api.get("/")
 async def root():
     return {"service": "raven-sharp-pod", "status": "ok",

@@ -15,6 +15,7 @@ import Schedules from "./pages/Schedules";
 import ImageGen from "./pages/ImageGen";
 import LegalPage from "./pages/Legal";
 import About from "./pages/About";
+import HealthMonitor from "./pages/HealthMonitor";
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
@@ -62,6 +63,7 @@ function AppRoutes() {
         <Route path="/account"     element={<ProtectedRoute><Account /></ProtectedRoute>} />
 
         {/* Fallback */}
+        <Route path="/health" element={<ProtectedRoute><HealthMonitor /></ProtectedRoute>} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
 
