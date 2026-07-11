@@ -190,6 +190,8 @@ export default function Dashboard() {
                 const status = runStatus(run);
                 const total = runTotal(run);
                 const canResume = ["in_progress", "processing"].includes(status);
+                const hasFailed = run?.results?.some(r => r.status === "failed" || r.error);
+                const allFailed = run?.results?.length > 0 && run.results.every(r => r.status === "failed" || r.error);
 
                 return (
                 <Link key={id}
@@ -212,10 +214,14 @@ export default function Dashboard() {
                     <span className={`text-xs px-2 py-1 rounded-full ${
                       status === "completed" ? "bg-emerald-500/10 text-emerald-400"
                         : canResume ? "bg-sky-500/10 text-sky-400"
+                        : allFailed ? "bg-red-500/10 text-red-400"
+                        : hasFailed ? "bg-amber-500/10 text-amber-400"
                         : "bg-amber-500/10 text-amber-400"
                     }`}>
                       {status === "completed" ? "Published"
                         : canResume ? `Resume · ${runResultCount(run)}/${total}`
+                        : allFailed ? "Failed — Try Again"
+                        : hasFailed ? `Partial — ${run.results.filter(r => !r.error && r.status !== "failed").length}/${total} OK`
                         : "Review"}
                     </span>
                     <ChevronRight className="w-4 h-4 text-[var(--subtle)] group-hover:text-[var(--muted)] transition-colors" />

@@ -207,6 +207,51 @@ export default function Pipeline() {
     navigate("/dashboard");
   };
 
+  // ── Retry failed images in the current run ────────────────────────────────
+  const retryFailed = async () => {
+    if (!runId) return;
+    const failedItems = completed.filter(r => r.status === "failed" || r.error);
+    if (failedItems.length === 0) {
+      toast.info("No failed images to retry");
+      return;
+    }
+    // Re-upload the original images that failed
+    const failedNames = new Set(failedItems.map(r => r.name));
+    const failedImages = images.filter(img => failedNames.has(img.name));
+    if (failedImages.length === 0) {
+      toast.error("Original image files not available — please start a new run");
+      return;
+    }
+    setRunning(true);
+    setAwaitingContinue(false);
+    toast.info(`Retrying ${failedImages.length} failed image${failedImages.length !== 1 ? "s" : ""}...`);
+    try {
+      const payload = {
+        platform: selectedPlatform,
+        market,
+        price_tier: priceTier,
+        images: failedImages.map(img => ({
+          name: img.name,
+          base64: img.base64,
+          mime: img.mime,
+        })),
+      };
+      const { data } = await createRun(payload);
+      const newRunId = data.run_id || data.id;
+      const newTotal = data.total || data.total_count || failedImages.length;
+      if (!newRunId) throw new Error("No run ID returned");
+      // Keep successful results, clear failed ones
+      setCompleted(prev => prev.filter(r => r.status !== "failed" && !r.error));
+      setRunId(newRunId);
+      setTotal(prev => prev - failedItems.length + newTotal);
+      setStep(4);
+      pollRun(newRunId, newTotal, 0);
+    } catch (err) {
+      toast.error(err.response?.data?.detail || err.message);
+      setRunning(false);
+    }
+  };
+
   // ── Kick off a brand new run ───────────────────────────────────────────────
   const runPipeline = async () => {
     if (!selectedPlatform || images.length === 0) return;
@@ -695,10 +740,33 @@ export default function Pipeline() {
                     </div>
                   )}
                   {!awaitingContinue && running && runId && (
-                    <button onClick={pauseRun}
-                      className="px-5 py-2.5 rounded-xl text-sm font-semibold border border-white/15 text-[var(--muted)] hover:text-[var(--text)] hover:border-white/30 transition-all">
-                      Save &amp; Continue Later
-                    </button>
+                    <div className="flex items-center justify-center gap-3 flex-wrap">
+                      <button onClick={pauseRun}
+                        className="px-5 py-2.5 rounded-xl text-sm font-semibold border border-white/15 text-[var(--muted)] hover:text-[var(--text)] hover:border-white/30 transition-all">
+                        Save &amp; Continue Later
+                      </button>
+                      {completed.some(r => r.status === "failed" || r.error) && (
+                        <button onClick={retryFailed}
+                          className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold bg-amber-500/15 border border-amber-500/30 text-amber-300 hover:bg-amber-500/25 transition-all">
+                          <RefreshCw className="w-4 h-4" /> Retry Failed
+                        </button>
+                      )}
+                    </div>
+                  )}
+                  {!running && completed.some(r => r.status === "failed" || r.error) && (
+                    <div className="mt-4 flex items-center justify-center gap-3 flex-wrap">
+                      <p className="text-xs text-red-400 w-full text-center mb-1">
+                        {completed.filter(r => r.status === "failed" || r.error).length} image{completed.filter(r => r.status === "failed" || r.error).length !== 1 ? "s" : ""} failed
+                      </p>
+                      <button onClick={retryFailed}
+                        className="flex items-center gap-2 px-6 py-2.5 rounded-xl text-sm font-semibold bg-amber-500/15 border border-amber-500/30 text-amber-300 hover:bg-amber-500/25 transition-all">
+                        <RefreshCw className="w-4 h-4" /> Retry Failed Images
+                      </button>
+                      <button onClick={() => { setStep(1); setCompleted([]); setRunId(null); setRunning(false); }}
+                        className="px-5 py-2.5 rounded-xl text-sm font-semibold border border-white/15 text-[var(--muted)] hover:text-[var(--text)] transition-all">
+                        Start New Run
+                      </button>
+                    </div>
                   )}
                 </>
               )}
