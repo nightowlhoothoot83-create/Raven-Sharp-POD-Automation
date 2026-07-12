@@ -22,9 +22,43 @@ ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
 
 # ── Config ────────────────────────────────────────────────────────────────────
-MONGO_URL         = os.environ["MONGO_URL"]
-DB_NAME           = os.environ["DB_NAME"]
-JWT_SECRET        = os.environ["JWT_SECRET"]
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+log = logging.getLogger("ravensharp-pod")
+
+# --- Self-healing startup config -------------------------------------------
+# Some vars have a safe auto-fix (app boots in a slightly degraded mode with a
+# loud warning). MONGO_URL has no safe default — if it's missing, we can't
+# invent a working database, so we fail fast with ONE clear diagnostic line
+# instead of a bare KeyError traceback that's hard to read in Railway logs.
+_startup_warnings = []
+
+MONGO_URL = os.environ.get("MONGO_URL")
+if not MONGO_URL:
+    log.critical(
+        "STARTUP FAILURE: MONGO_URL is not set on this deployment. "
+        "The app cannot start without a database connection string. "
+        "Set MONGO_URL in Railway's environment variables for this service and redeploy."
+    )
+    raise RuntimeError("Missing required environment variable: MONGO_URL")
+
+DB_NAME = os.environ.get("DB_NAME")
+if not DB_NAME:
+    DB_NAME = "ravensharp_pod"
+    _startup_warnings.append(f"DB_NAME was not set — defaulting to '{DB_NAME}'.")
+
+JWT_SECRET = os.environ.get("JWT_SECRET")
+if not JWT_SECRET:
+    import secrets as _secrets
+    JWT_SECRET = _secrets.token_hex(32)
+    _startup_warnings.append(
+        "JWT_SECRET was not set — auto-generated a temporary one for this boot. "
+        "Existing user sessions will be invalidated on every restart until a permanent "
+        "JWT_SECRET is set in Railway's environment variables."
+    )
+
+for _w in _startup_warnings:
+    log.warning("STARTUP: %s", _w)
+
 ANTHROPIC_KEY     = os.environ.get("ANTHROPIC_API_KEY", "")
 REPLICATE_KEY     = os.environ.get("REPLICATE_API_KEY", "")
 # Image generation uses Replicate FLUX.1 — same key as upscaling
@@ -58,9 +92,6 @@ db     = client[DB_NAME]
 
 app = FastAPI(title="Raven Sharp POD Suite API")
 api = APIRouter(prefix="/api")
-
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-log = logging.getLogger("ravensharp-pod")
 
 app.add_middleware(
     CORSMiddleware,
@@ -1260,9 +1291,57 @@ async def root():
 
 app.include_router(api)
 
+# ── Global error visibility ──────────────────────────────────────────────────
+# Any exception not already handled by a specific try/except becomes a bare
+# 500 by default, with nothing useful in the response and no easy way to match
+# a customer's "it broke" report to the right line in the logs. This catches
+# everything, logs the full traceback under a short error ID, and returns that
+# same ID to the frontend so it can be shown to the customer — if they report
+# "error 7F3K2Q", you can grep Railway logs for that exact ID and see the full
+# trace immediately instead of guessing.
+import traceback as _traceback
+import secrets as _secrets_err
+
+@app.exception_handler(Exception)
+async def _global_exception_handler(request: Request, exc: Exception):
+    error_id = _secrets_err.token_hex(4).upper()
+    log.error(
+        "UNHANDLED ERROR [%s] on %s %s: %s\n%s",
+        error_id, request.method, request.url.path, repr(exc),
+        "".join(_traceback.format_exception(type(exc), exc, exc.__traceback__)),
+    )
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": f"Something went wrong ({type(exc).__name__}). "
+                     f"If this keeps happening, report error {error_id} to support.",
+            "error_id": error_id,
+        },
+    )
+
 @app.get("/health")
 async def health():
-    return {"status": "ok", "service": "raven-sharp-pod"}
+    checks = {}
+    overall_ok = True
+
+    try:
+        await asyncio.wait_for(client.admin.command("ping"), timeout=3.0)
+        checks["mongodb"] = "ok"
+    except Exception as e:
+        checks["mongodb"] = f"unreachable: {type(e).__name__}"
+        overall_ok = False
+
+    checks["r2_configured"] = bool(R2_ENDPOINT and R2_ACCESS_KEY and R2_SECRET_KEY)
+    checks["replicate_configured"] = bool(REPLICATE_KEY)
+    checks["anthropic_configured"] = bool(ANTHROPIC_KEY)
+    checks["stripe_configured"] = bool(STRIPE_KEY)
+    if _startup_warnings:
+        checks["startup_warnings"] = _startup_warnings
+
+    return JSONResponse(
+        status_code=200 if overall_ok else 503,
+        content={"status": "ok" if overall_ok else "degraded", "service": "raven-sharp-pod", "checks": checks},
+    )
 
 if __name__ == "__main__":
     import uvicorn

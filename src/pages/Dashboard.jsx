@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import api from "../lib/api";
 import ADGFooter from "../components/ADGFooter";
+import HowToGuide from "../components/HowToGuide";
 import { Zap, Wand2, Calendar, Clock, ChevronRight, Plus, Check, AlertTriangle } from "lucide-react";
 
 const TIER_LIMITS = {
@@ -96,6 +97,8 @@ export default function Dashboard() {
   return (
     <div className="min-h-screen pt-20 pb-16">
       <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
+
+        <HowToGuide />
 
         {/* Welcome */}
         <div className="mb-10 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">

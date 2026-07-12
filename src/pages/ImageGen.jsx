@@ -56,7 +56,8 @@ export default function ImageGen() {
       setBatches(newBatches);
       setTab("history");
     } catch (err) {
-      toast.error(err.response?.data?.detail || err.message);
+      const _eid = err.response?.data?.error_id;
+      toast.error((err.response?.data?.detail || err.response?.data?.error || err.message) + (_eid ? ` (error ${_eid})` : ""));
     } finally {
       setGenerating(false);
     }

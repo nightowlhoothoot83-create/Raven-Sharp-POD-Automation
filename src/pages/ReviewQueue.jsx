@@ -325,7 +325,8 @@ export default function ReviewQueue() {
       if (data.failed > 0) toast.error(`${data.failed} failed — check your platform connection`);
       setTimeout(() => navigate("/dashboard"), 1500);
     } catch (err) {
-      toast.error(err.response?.data?.detail || err.message);
+      const _eid = err.response?.data?.error_id;
+      toast.error((err.response?.data?.detail || err.response?.data?.error || err.message) + (_eid ? ` (error ${_eid})` : ""));
     } finally {
       setPushing(false);
     }

@@ -183,7 +183,8 @@ export default function Pipeline() {
         pollTimerRef.current = setTimeout(() => pollRun(rid, runTotal, alreadyDone, retryCount + 1), 1500);
         return;
       }
-      toast.error(err.response?.data?.detail || err.message);
+      const _eid = err.response?.data?.error_id;
+      toast.error((err.response?.data?.detail || err.response?.data?.error || err.message) + (_eid ? ` (error ${_eid})` : ""));
       setRunning(false);
     }
   };
@@ -247,7 +248,8 @@ export default function Pipeline() {
       setStep(4);
       pollRun(newRunId, newTotal, 0);
     } catch (err) {
-      toast.error(err.response?.data?.detail || err.message);
+      const _eid = err.response?.data?.error_id;
+      toast.error((err.response?.data?.detail || err.response?.data?.error || err.message) + (_eid ? ` (error ${_eid})` : ""));
       setRunning(false);
     }
   };
@@ -282,7 +284,8 @@ export default function Pipeline() {
       pollRun(createdRunId, createdTotal, 0);
 
     } catch (err) {
-      toast.error(err.response?.data?.detail || err.message);
+      const _eid = err.response?.data?.error_id;
+      toast.error((err.response?.data?.detail || err.response?.data?.error || err.message) + (_eid ? ` (error ${_eid})` : ""));
       setRunning(false);
       setStep(3);
     }
