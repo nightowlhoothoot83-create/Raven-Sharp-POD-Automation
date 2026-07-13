@@ -414,11 +414,10 @@ async def _process_image_gen(batch_id: str, user_id: str, full_prompt: str,
             )
             try:
                 res = await client_http.post(
-                    "https://api.replicate.com/v1/predictions",
+                    "https://api.replicate.com/v1/models/black-forest-labs/flux-schnell/predictions",
                     headers={"Authorization": f"Token {REPLICATE_KEY}",
                              "Content-Type": "application/json"},
                     json={
-                        "version": "black-forest-labs/flux-schnell",
                         "input": {
                             "prompt": full_prompt,
                             "width":  dims["width"],
@@ -494,11 +493,10 @@ async def _retry_single_image(batch_id: str, index: int, full_prompt: str, dims:
     async with httpx.AsyncClient(timeout=180) as client_http:
         try:
             res = await client_http.post(
-                "https://api.replicate.com/v1/predictions",
+                "https://api.replicate.com/v1/models/black-forest-labs/flux-schnell/predictions",
                 headers={"Authorization": f"Token {REPLICATE_KEY}",
                          "Content-Type": "application/json"},
                 json={
-                    "version": "black-forest-labs/flux-schnell",
                     "input": {
                         "prompt": full_prompt,
                         "width":  dims["width"],
@@ -773,7 +771,7 @@ Tags: max 13 for Etsy, max 15 for Redbubble, unlimited for others."""
             headers={"x-api-key": ANTHROPIC_KEY,
                      "anthropic-version": "2023-06-01",
                      "content-type": "application/json"},
-            json={"model": "claude-sonnet-4-6",
+            json={"model": "claude-sonnet-5",
                   "max_tokens": 2000,
                   "messages": [{"role": "user", "content": [
                       {"type": "image", "source": {
