@@ -116,7 +116,12 @@ export default function Pipeline() {
         setStep(4);
         setRunning(true);
         setResuming(false);
-        pollRun(data.id);
+        // Pass the freshly-fetched values directly rather than relying on
+        // `total`/`completed` state — those setState calls above haven't
+        // actually applied yet at this point (React batches updates), so
+        // pollRun would otherwise poll using stale/zero values instead of
+        // this run's real progress.
+        pollRun(data.id, data.total_count, (data.results || []).length);
       } catch (err) {
         toast.error("Could not load that run to resume");
         setResuming(false);
