@@ -175,6 +175,13 @@ class PipelineRunIn(BaseModel):
     market: Optional[str] = "global"
     price_tier: Optional[str] = "mid"
 
+class PipelineRetryIn(BaseModel):
+    # Only required if the failed image never made it past the upscale step
+    # (no checkpoint) — the source file isn't kept in the DB to save space,
+    # so the frontend re-sends it from the browser's copy for that case only.
+    base64: Optional[str] = None
+    mime: Optional[str] = "image/jpeg"
+
 class ImageGenIn(BaseModel):
     prompt: str
     style_profile_id: Optional[str] = None
@@ -220,13 +227,13 @@ def make_refresh(user_id: str) -> str:
                       JWT_SECRET, algorithm="HS256")
 
 def set_cookies(response: Response, access: str, refresh: str):
-    frontend_is_https = FRONTEND_URL.startswith("https://")
-    kw = dict(
-        httponly=True,
-        secure=frontend_is_https,
-        samesite="none" if frontend_is_https else "lax",
-        path="/",
-    )
+    # Always secure/cross-site in production — Railway backend and Cloudflare
+    # Pages frontend are always on different HTTPS domains from each other,
+    # regardless of what FRONTEND_URL happens to be set to. Tying this to
+    # FRONTEND_URL was fragile: if that one env var wasn't set correctly,
+    # cookies silently fell back to settings that don't work cross-origin at
+    # all, making every request after login look unauthenticated.
+    kw = dict(httponly=True, secure=True, samesite="none", path="/")
     response.set_cookie("access_token", access,  max_age=86400, **kw)
     response.set_cookie("refresh_token", refresh, max_age=604800, **kw)
 
@@ -777,46 +784,81 @@ Tags: max 13 for Etsy, max 15 for Redbubble, unlimited for others."""
         if content.startswith("json"): content = content[4:]
     return json.loads(content.strip())
 
+async def _process_one_pipeline_image(run_id, idx, total, img_data, platform, market, price_tier, checkpoint=None):
+    """Processes a single image through upscale -> R2 upload -> Claude analysis.
+    Each substep result is saved to the DB the moment it completes, and a
+    `checkpoint` (from a previous failed attempt) lets a retry skip straight to
+    the step that actually failed, instead of re-paying for upscaling or
+    re-uploading an image that already succeeded last time."""
+    checkpoint = checkpoint or {}
+    image_b64 = img_data["base64"]
+    mime      = img_data.get("mime", "image/jpeg")
+    name      = img_data.get("name", "artwork")
+
+    async def set_step(step_label):
+        await db.pipeline_runs.update_one(
+            {"id": run_id},
+            {"$set": {"current_step": f"Image {idx+1} of {total} ({name}): {step_label}"}}
+        )
+
+    upscaled_b64 = checkpoint.get("upscaled_b64")
+    public_url = checkpoint.get("public_url")
+    try:
+        if upscaled_b64:
+            log.info(f"[{run_id}] {name}: reusing already-upscaled result (checkpoint)")
+        else:
+            await set_step("upscaling")
+            log.info(f"[{run_id}] Upscaling {name}...")
+            upscaled_b64 = await true_upscale(image_b64, mime, scale=4)
+
+        if public_url:
+            log.info(f"[{run_id}] {name}: reusing already-uploaded R2 url (checkpoint)")
+        else:
+            await set_step("uploading to storage")
+            log.info(f"[{run_id}] Uploading {name} to R2...")
+            public_url = await upload_to_r2(upscaled_b64, f"{uuid.uuid4()}-{name}.png")
+
+        await set_step("analysing with Claude Vision")
+        log.info(f"[{run_id}] Analysing {name} with Claude Vision...")
+        analysis = await analyse_with_claude(upscaled_b64, mime, platform, market, price_tier)
+
+        return {
+            "id": checkpoint.get("id") or str(uuid.uuid4()),
+            "name": name,
+            "public_url": public_url,
+            "upscaled_b64": upscaled_b64[:100] + "...",
+            "analysis": analysis,
+            "status": "pending_review",
+            "platform": platform,
+            "edited": False,
+            "checkpoint": {"upscaled_b64": upscaled_b64, "public_url": public_url},
+        }
+    except Exception as e:
+        log.error(f"[{run_id}] Pipeline error for {name}: {e}")
+        # Preserve whatever succeeded so a retry can resume instead of restart
+        # and re-pay for API calls that already completed.
+        preserved = {}
+        if upscaled_b64: preserved["upscaled_b64"] = upscaled_b64
+        if public_url: preserved["public_url"] = public_url
+        return {
+            "id": checkpoint.get("id") or str(uuid.uuid4()),
+            "name": name,
+            "error": str(e),
+            "status": "failed",
+            "checkpoint": preserved,
+        }
+
+
 async def _process_pipeline_images(run_id: str, user_id: str, images_payload, platform, market, price_tier):
     """Background worker — processes images one at a time, saving progress after each.
     Runs independently of the original HTTP request, so a closed browser tab or
     network drop never loses completed work."""
     results = []
-    for img_data in images_payload:
-        try:
-            image_b64 = img_data["base64"]
-            mime      = img_data.get("mime", "image/jpeg")
-            name      = img_data.get("name", "artwork")
-
-            log.info(f"[{run_id}] Upscaling {name}...")
-            upscaled_b64 = await true_upscale(image_b64, mime, scale=4)
-
-            log.info(f"[{run_id}] Uploading {name} to R2...")
-            public_url = await upload_to_r2(upscaled_b64, f"{uuid.uuid4()}-{name}.png")
-
-            log.info(f"[{run_id}] Analysing {name} with Claude Vision...")
-            analysis = await analyse_with_claude(
-                upscaled_b64, mime, platform, market, price_tier)
-
-            result_item = {
-                "id": str(uuid.uuid4()),
-                "name": name,
-                "public_url": public_url,
-                "upscaled_b64": upscaled_b64[:100] + "...",
-                "analysis": analysis,
-                "status": "pending_review",
-                "platform": platform,
-                "edited": False
-            }
-        except Exception as e:
-            log.error(f"[{run_id}] Pipeline error for {img_data.get('name')}: {e}")
-            result_item = {
-                "id": str(uuid.uuid4()),
-                "name": img_data.get("name", "unknown"),
-                "error": str(e),
-                "status": "failed"
-            }
-
+    total = len(images_payload)
+    for idx, img_data in enumerate(images_payload):
+        result_item = await _process_one_pipeline_image(
+            run_id, idx, total, img_data, platform, market, price_tier
+        )
         results.append(result_item)
 
         # Save after every single image — partial progress is never lost
@@ -827,7 +869,7 @@ async def _process_pipeline_images(run_id: str, user_id: str, images_payload, pl
 
     await db.pipeline_runs.update_one(
         {"id": run_id},
-        {"$set": {"status": "pending_review"}}
+        {"$set": {"status": "pending_review", "current_step": None}}
     )
     await db.users.update_one({"id": user_id},
                                {"$inc": {"pipeline_runs_used": 1}})
@@ -891,6 +933,55 @@ async def get_run(run_id: str, user: dict = Depends(get_user)):
         {"_id": 0, "results.upscaled_b64": 0})
     if not run: raise HTTPException(404, "Run not found")
     return run
+
+@api.post("/pipeline/runs/{run_id}/retry/{image_id}")
+async def retry_pipeline_image(run_id: str, image_id: str, payload: PipelineRetryIn,
+                                background_tasks: BackgroundTasks,
+                                user: dict = Depends(get_user)):
+    """Retry a single failed image in a pipeline run. Resumes from whatever
+    steps already succeeded (checkpoint) so you don't re-pay for upscaling or
+    re-upload an image that already made it through those steps last time.
+    If upscaling itself is what needs retrying, the frontend must re-send the
+    source image (we don't keep the raw source in the DB to save space)."""
+    run = await db.pipeline_runs.find_one({"id": run_id, "user_id": user["id"]})
+    if not run: raise HTTPException(404, "Run not found")
+
+    item = next((r for r in run["results"] if r.get("id") == image_id), None)
+    if not item: raise HTTPException(404, "Image not found in this run")
+    if item.get("status") != "failed":
+        raise HTTPException(400, "Only failed images can be retried")
+
+    checkpoint = dict(item.get("checkpoint") or {})
+    if not checkpoint.get("upscaled_b64") and not payload.base64:
+        raise HTTPException(
+            400,
+            "This image never got past the upscale step, so the original file "
+            "is needed again to retry — please re-upload it."
+        )
+
+    idx = run["results"].index(item)
+    total = len(run["results"])
+
+    async def _do_retry():
+        img_payload = {
+            "base64": payload.base64 or "",
+            "mime": payload.mime or "image/jpeg",
+            "name": item["name"],
+        }
+        checkpoint["id"] = image_id
+        new_item = await _process_one_pipeline_image(
+            run_id, idx, total, img_payload,
+            run["platform"], "global", "mid",
+            checkpoint=checkpoint,
+        )
+        results = run["results"]
+        results[idx] = new_item
+        await db.pipeline_runs.update_one(
+            {"id": run_id}, {"$set": {"results": results, "current_step": None}}
+        )
+
+    background_tasks.add_task(_do_retry)
+    return {"status": "retrying", "image_id": image_id}
 
 @api.post("/pipeline/runs/{run_id}/process-next")
 async def process_next_compat(run_id: str, user: dict = Depends(get_user)):

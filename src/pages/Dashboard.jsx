@@ -149,8 +149,8 @@ export default function Dashboard() {
         {/* Quick actions */}
         <div className="grid sm:grid-cols-3 gap-4 mb-8">
           {[
-            { to:"/pipeline",  icon:<Zap className="w-5 h-5" />,      title:"New Pipeline Run",  desc:"Upload art → push to platform" },
             { to:"/image-gen", icon:<Wand2 className="w-5 h-5" />,    title:"Generate Images",   desc:"AI art → review → pipeline" },
+            { to:"/pipeline",  icon:<Zap className="w-5 h-5" />,      title:"New Pipeline Run",  desc:"Upload art → push to platform" },
             { to:"/schedules", icon:<Calendar className="w-5 h-5" />, title:"Manage Schedules",  desc:"Automate your pipeline runs" },
           ].map(action => (
             <Link key={action.to} to={action.to}

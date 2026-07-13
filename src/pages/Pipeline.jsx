@@ -173,10 +173,15 @@ export default function Pipeline() {
         return;
       }
       setAwaitingContinue(false);
-      setProgress({ step: `Processing image ${Math.min(results.length + 1, savedTotal)} of ${savedTotal}...`, pct });
-      pollTimerRef.current = setTimeout(() => pollRun(rid, savedTotal, results.length), 5000);
+      // Prefer the real, live step the backend is actually doing right now
+      // (e.g. "Image 3 of 10 (design.png): analysing with Claude Vision")
+      // over a generic client-side guess.
+      setProgress({
+        step: data.current_step || `Processing image ${Math.min(results.length + 1, savedTotal)} of ${savedTotal}...`,
+        pct,
+      });
+      pollTimerRef.current = setTimeout(() => pollRun(rid, savedTotal, results.length), 3000);
       return;
-      setProgress({ step: `Image ${data.processed} of ${data.total} ready — review the preview`, pct: Math.round((data.processed / data.total) * 100) });
     } catch (err) {
       if (err.response?.status === 404 && retryCount < 3) {
         setProgress({ step: "Waiting for saved run...", pct: Math.max(2, Math.round((alreadyDone / runTotal) * 100)) });
@@ -209,6 +214,10 @@ export default function Pipeline() {
   };
 
   // ── Retry failed images in the current run ────────────────────────────────
+  // Uses the checkpoint-aware retry endpoint: if an image already made it
+  // through upscaling/upload before failing (e.g. only the analysis step
+  // failed), the retry skips straight to the failed step instead of
+  // re-running — and re-paying for — everything from scratch.
   const retryFailed = async () => {
     if (!runId) return;
     const failedItems = completed.filter(r => r.status === "failed" || r.error);
@@ -216,37 +225,23 @@ export default function Pipeline() {
       toast.info("No failed images to retry");
       return;
     }
-    // Re-upload the original images that failed
-    const failedNames = new Set(failedItems.map(r => r.name));
-    const failedImages = images.filter(img => failedNames.has(img.name));
-    if (failedImages.length === 0) {
-      toast.error("Original image files not available — please start a new run");
-      return;
-    }
     setRunning(true);
     setAwaitingContinue(false);
-    toast.info(`Retrying ${failedImages.length} failed image${failedImages.length !== 1 ? "s" : ""}...`);
+    toast.info(`Retrying ${failedItems.length} failed image${failedItems.length !== 1 ? "s" : ""} — already-completed steps won't be re-run...`);
     try {
-      const payload = {
-        platform: selectedPlatform,
-        market,
-        price_tier: priceTier,
-        images: failedImages.map(img => ({
-          name: img.name,
-          base64: img.base64,
-          mime: img.mime,
-        })),
-      };
-      const { data } = await createRun(payload);
-      const newRunId = data.run_id || data.id;
-      const newTotal = data.total || data.total_count || failedImages.length;
-      if (!newRunId) throw new Error("No run ID returned");
-      // Keep successful results, clear failed ones
+      await Promise.all(failedItems.map(item => {
+        const src = images.find(img => img.name === item.name);
+        return api.post(`/pipeline/runs/${runId}/retry/${item.id}`, {
+          base64: src?.base64 || null,
+          mime: src?.mime || "image/jpeg",
+        }).catch(err => {
+          const msg = err.userMessage || err.response?.data?.error || err.message;
+          toast.error(`Couldn't retry ${item.name}: ${msg}`);
+        });
+      }));
       setCompleted(prev => prev.filter(r => r.status !== "failed" && !r.error));
-      setRunId(newRunId);
-      setTotal(prev => prev - failedItems.length + newTotal);
       setStep(4);
-      pollRun(newRunId, newTotal, 0);
+      pollRun(runId, total, completed.length - failedItems.length);
     } catch (err) {
       const _eid = err.response?.data?.error_id;
       toast.error((err.response?.data?.detail || err.response?.data?.error || err.message) + (_eid ? ` (error ${_eid})` : ""));
@@ -489,6 +484,20 @@ export default function Pipeline() {
                 )}
               </div>
             )}
+
+            {/* Need to crop or remove background first? */}
+            <div className="flex items-start gap-3 mb-5 px-4 py-3 rounded-xl bg-amber-500/8 border border-amber-500/20">
+              <Info className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+              <div className="text-xs text-[var(--muted)]">
+                <span className="text-[var(--text)] font-semibold">Need to crop or remove a background first?</span>{" "}
+                Use{" "}
+                <a href="https://raven-sharp-image-optimiser-upscaler.pages.dev" target="_blank" rel="noopener"
+                   className="text-[var(--raven-glow)] underline hover:no-underline">
+                  Image Optimiser
+                </a>{" "}
+                to fix your artwork before uploading here — the pipeline upscales and analyses images as-is, it doesn't edit them.
+              </div>
+            </div>
 
             {/* Dropzone */}
             <div
