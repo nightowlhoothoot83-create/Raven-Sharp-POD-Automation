@@ -678,11 +678,18 @@ async def true_upscale(image_base64: str, mime: str, scale: int = 4) -> str:
 
 # ── Pipeline ──────────────────────────────────────────────────────────────────
 async def upload_to_r2(image_base64: str, filename: str, mime: str = "image/png") -> str:
-    """Upload image to Cloudflare R2 using boto3 with proper AWS SigV4 auth."""
+    """Upload image to Cloudflare R2 using boto3 with proper AWS SigV4 auth.
+    boto3 has no native async support — its calls are blocking/synchronous.
+    Running that directly inside this async function would freeze the
+    entire event loop (and therefore every other in-flight request, including
+    progress-polling checks) for however long the upload takes. Wrapping it
+    in asyncio.to_thread() runs it on a separate thread instead, so the rest
+    of the server keeps responding normally while an upload is in progress."""
     if not R2_ENDPOINT or not R2_ACCESS_KEY or not R2_SECRET_KEY:
         log.warning("R2 not fully configured — skipping upload, public_url will be empty")
         return ""
-    try:
+
+    def _blocking_upload():
         import boto3
         from botocore.config import Config
         import io
@@ -706,13 +713,13 @@ async def upload_to_r2(image_base64: str, filename: str, mime: str = "image/png"
             ExtraArgs={"ContentType": mime, "ACL": "public-read"},
         )
 
-        # Return the public URL
-        # If R2 has a custom domain configured, use R2_PUBLIC_URL env var
         public_base = os.environ.get("R2_PUBLIC_URL", f"{R2_ENDPOINT}/{R2_BUCKET}")
-        public_url = f"{public_base.rstrip('/')}/{key}"
+        return f"{public_base.rstrip('/')}/{key}"
+
+    try:
+        public_url = await asyncio.to_thread(_blocking_upload)
         log.info(f"R2 upload success: {public_url}")
         return public_url
-
     except Exception as e:
         log.error(f"R2 upload error: {e}")
         return ""
