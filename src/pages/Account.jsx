@@ -13,8 +13,37 @@ import {
   Zap,
   Link as LinkIcon,
   Unlink,
+  AlertTriangle,
 } from "lucide-react";
 import { toast } from "sonner";
+
+const TIER_LIMITS = {
+  free:    { pipeline_runs: 3,   images_per_run: 3,  ai_gen_credits: 5 },
+  creator: { pipeline_runs: 20,  images_per_run: 10, ai_gen_credits: 30 },
+  pro:     { pipeline_runs: 50,  images_per_run: 25, ai_gen_credits: 100 },
+  agency:  { pipeline_runs: 80,  images_per_run: 40, ai_gen_credits: 250 },
+  owner:   { pipeline_runs: 9999, images_per_run: 9999, ai_gen_credits: 9999 },
+};
+
+function UsageBar({ used, max, label, color = "var(--raven)" }) {
+  const safeUsed = Number.isFinite(Number(used)) ? Number(used) : 0;
+  const safeMax = Number.isFinite(Number(max)) && Number(max) > 0 ? Number(max) : 0;
+  const pct = safeMax >= 9999 || safeMax === 0 ? 0 : Math.min((safeUsed / safeMax) * 100, 100);
+  return (
+    <div>
+      <div className="flex justify-between text-xs mb-1.5">
+        <span className="text-[var(--muted)]">{label}</span>
+        <span className="font-mono text-[var(--text)]">
+          {safeMax >= 9999 ? "∞" : `${safeUsed} / ${safeMax}`}
+        </span>
+      </div>
+      <div className="h-1.5 bg-white/10 rounded-full overflow-hidden">
+        <div className="h-full rounded-full transition-all duration-700"
+          style={{ width: `${safeMax >= 9999 ? 20 : pct}%`, background: `linear-gradient(90deg, ${color}, ${color}aa)` }} />
+      </div>
+    </div>
+  );
+}
 
 const PLATFORM_DOCS = {
   gelato: "https://dashboard.gelato.com/settings/api",
@@ -277,6 +306,13 @@ function PlatformRow({
 export default function Account() {
   const { user } = useAuth();
   const [platforms, setPlatforms] = useState({ connected: [], stores: {}, available: {} });
+  const [totalRuns, setTotalRuns] = useState(0);
+
+  useEffect(() => {
+    api.get("/pipeline/runs")
+      .then(({ data }) => setTotalRuns(Array.isArray(data) ? data.length : 0))
+      .catch(() => {});
+  }, []);
 
   const refreshPlatforms = async () => {
     const { data } = await api.get("/account/platforms");
@@ -357,11 +393,12 @@ export default function Account() {
               </Link>
             )}
           </div>
-          <div className="grid sm:grid-cols-3 gap-4 text-sm">
+          <div className="grid sm:grid-cols-4 gap-4 text-sm">
             {[
               { label: "Current Plan", value: tier.charAt(0).toUpperCase() + tier.slice(1) },
               { label: "Pipeline Runs Used", value: user?.pipeline_runs_used || 0 },
               { label: "AI Credits Used", value: user?.ai_gen_credits_used || 0 },
+              { label: "Total Runs (all time)", value: totalRuns },
             ].map(item => (
               <div key={item.label} className="p-4 rounded-xl bg-white/5 text-center">
                 <div className="font-display text-xl font-bold">{item.value}</div>
@@ -369,6 +406,17 @@ export default function Account() {
               </div>
             ))}
           </div>
+          <div className="mt-5 space-y-4">
+            <UsageBar used={user?.pipeline_runs_used || 0} max={TIER_LIMITS[tier]?.pipeline_runs} label="Pipeline Runs" />
+            <UsageBar used={user?.ai_gen_credits_used || 0} max={TIER_LIMITS[tier]?.ai_gen_credits} label="AI Gen Credits" color="var(--gold)" />
+          </div>
+          {tier !== "owner" && (user?.pipeline_runs_used || 0) >= (TIER_LIMITS[tier]?.pipeline_runs || 0) * 0.8 && (
+            <div className="mt-4 flex items-center gap-2 text-xs text-amber-400 px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/20">
+              <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+              You're approaching your monthly limit.{" "}
+              <Link to="/pricing" className="underline hover:text-amber-300">Upgrade to continue</Link>
+            </div>
+          )}
           {tier === "free" && (
             <div className="mt-4 p-4 rounded-xl bg-[var(--raven)]/10 border border-[var(--raven)]/20 text-sm">
               <p className="text-[var(--muted)]">

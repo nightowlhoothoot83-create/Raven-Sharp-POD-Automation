@@ -4,35 +4,15 @@ import { useAuth } from "../context/AuthContext";
 import api from "../lib/api";
 import ADGFooter from "../components/ADGFooter";
 import HowToGuide from "../components/HowToGuide";
-import { Zap, Wand2, Calendar, Clock, ChevronRight, Plus, Check, AlertTriangle } from "lucide-react";
+import { Zap, Wand2, Calendar, Clock, ChevronRight, Plus, Check } from "lucide-react";
 
 const TIER_LIMITS = {
-  free:    { pipeline_runs: 3,   images_per_run: 1,  ai_gen_credits: 5 },
+  free:    { pipeline_runs: 3,   images_per_run: 3,  ai_gen_credits: 5 },
   creator: { pipeline_runs: 20,  images_per_run: 10, ai_gen_credits: 30 },
   pro:     { pipeline_runs: 50,  images_per_run: 25, ai_gen_credits: 100 },
   agency:  { pipeline_runs: 80,  images_per_run: 40, ai_gen_credits: 250 },
   owner:   { pipeline_runs: 9999, images_per_run: 9999, ai_gen_credits: 9999 },
 };
-
-function UsageBar({ used, max, label, color = "var(--raven)" }) {
-  const safeUsed = Number.isFinite(Number(used)) ? Number(used) : 0;
-  const safeMax = Number.isFinite(Number(max)) && Number(max) > 0 ? Number(max) : 0;
-  const pct = safeMax >= 9999 || safeMax === 0 ? 0 : Math.min((safeUsed / safeMax) * 100, 100);
-  return (
-    <div>
-      <div className="flex justify-between text-xs mb-1.5">
-        <span className="text-[var(--muted)]">{label}</span>
-        <span className="font-mono text-[var(--text)]">
-          {safeMax >= 9999 ? "∞" : `${safeUsed} / ${safeMax}`}
-        </span>
-      </div>
-      <div className="h-1.5 bg-white/10 rounded-full overflow-hidden">
-        <div className="h-full rounded-full transition-all duration-700"
-          style={{ width: `${safeMax >= 9999 ? 20 : pct}%`, background: `linear-gradient(90deg, ${color}, ${color}aa)` }} />
-      </div>
-    </div>
-  );
-}
 
 function cleanRuns(data) {
   return Array.isArray(data) ? data.filter(run => run && typeof run === "object") : [];
@@ -90,9 +70,6 @@ export default function Dashboard() {
   const tier = cleanTier(user?.tier);
   const limits = TIER_LIMITS[tier] || TIER_LIMITS.free;
   const runsUsed = Number.isFinite(Number(user?.pipeline_runs_used)) ? Number(user?.pipeline_runs_used) : 0;
-  const genUsed  = Number.isFinite(Number(user?.ai_gen_credits_used)) ? Number(user?.ai_gen_credits_used) : 0;
-
-  const TIER_COLORS = { free:"var(--muted)", creator:"var(--raven-glow)", pro:"var(--gold)", agency:"#34d399", owner:"#f87171" };
 
   return (
     <div className="min-h-screen pt-20 pb-16">
@@ -114,36 +91,18 @@ export default function Dashboard() {
           </Link>
         </div>
 
-        {/* Stats */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-          {[
-            { label: "Tier",         value: tier.toUpperCase(), sub: "current plan", color: TIER_COLORS[tier] },
-            { label: "Runs Used",    value: limits.pipeline_runs >= 9999 ? "∞" : `${runsUsed}/${limits.pipeline_runs}`, sub: "this month", color: "var(--raven-glow)" },
-            { label: "AI Credits",   value: limits.ai_gen_credits >= 9999 ? "∞" : `${genUsed}/${limits.ai_gen_credits}`, sub: "image gen", color: "var(--gold)" },
-            { label: "Total Runs",   value: runs.length, sub: "all time", color: "#34d399" },
-          ].map(stat => (
-            <div key={stat.label} className="glass rounded-2xl p-5">
-              <div className="font-display text-2xl font-black" style={{ color: stat.color }}>{stat.value}</div>
-              <div className="text-sm font-medium mt-1">{stat.label}</div>
-              <div className="text-xs text-[var(--subtle)] mt-0.5">{stat.sub}</div>
+        {/* Account & usage stats moved to /account to keep this page focused
+            on "what do I do next" rather than duplicating account details. */}
+        <div className="glass rounded-2xl p-5 mb-8 flex items-center justify-between">
+          <div>
+            <div className="text-sm font-semibold">{tier.toUpperCase()} plan</div>
+            <div className="text-xs text-[var(--subtle)] mt-0.5">
+              {limits.pipeline_runs >= 9999 ? "Unlimited runs" : `${runsUsed}/${limits.pipeline_runs} runs used this month`}
             </div>
-          ))}
-        </div>
-
-        {/* Usage */}
-        <div className="glass rounded-2xl p-6 mb-8">
-          <h2 className="font-display text-lg font-bold mb-5">Monthly Usage</h2>
-          <div className="space-y-4">
-            <UsageBar used={runsUsed} max={limits.pipeline_runs} label="Pipeline Runs" />
-            <UsageBar used={genUsed} max={limits.ai_gen_credits} label="AI Gen Credits" color="var(--gold)" />
           </div>
-          {tier !== "owner" && runsUsed >= limits.pipeline_runs * 0.8 && (
-            <div className="mt-4 flex items-center gap-2 text-xs text-amber-400 px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/20">
-              <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
-              You're approaching your monthly limit.{" "}
-              <Link to="/pricing" className="underline hover:text-amber-300">Upgrade to continue</Link>
-            </div>
-          )}
+          <Link to="/account" className="flex items-center gap-1.5 text-xs text-[var(--raven-glow)] hover:underline shrink-0">
+            View account &amp; usage <ChevronRight className="w-3.5 h-3.5" />
+          </Link>
         </div>
 
         {/* Quick actions */}
