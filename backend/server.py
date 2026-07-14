@@ -683,6 +683,60 @@ async def true_upscale(image_base64: str, mime: str, scale: int = 4) -> str:
 
     return image_base64
 
+# ── Background Removal via Replicate ─────────────────────────────────────────
+async def remove_background(image_base64: str, mime: str) -> str:
+    """AI background removal using 851-labs/background-remover via Replicate.
+    Same model as Image Optimiser, for visual consistency across ADG tools.
+    Mirrors true_upscale()'s style: logs and returns the original image on
+    any failure rather than raising, so one failed background-removal step
+    doesn't take down the whole pipeline run for that image."""
+    if not REPLICATE_KEY:
+        log.warning("No Replicate key — skipping background removal, returning original")
+        return image_base64
+
+    async with httpx.AsyncClient(timeout=120) as client_http:
+        upload_res = await client_http.post(
+            "https://api.replicate.com/v1/files",
+            headers={"Authorization": f"Token {REPLICATE_KEY}"},
+            files={"content": ("upload." + mime.split("/")[-1], base64.b64decode(image_base64), mime)},
+        )
+        if upload_res.status_code not in (200, 201):
+            log.error(f"Replicate file upload error: {upload_res.status_code} {upload_res.text}")
+            return image_base64
+
+        image_url = upload_res.json().get("urls", {}).get("get") or upload_res.json().get("serving_url")
+        if not image_url:
+            log.error(f"Replicate file upload — no URL in response: {upload_res.text}")
+            return image_base64
+
+        res = await client_http.post(
+            "https://api.replicate.com/v1/models/851-labs/background-remover/predictions",
+            headers={"Authorization": f"Token {REPLICATE_KEY}", "Content-Type": "application/json"},
+            json={"input": {"image": image_url}},
+        )
+        if res.status_code != 201:
+            log.error(f"Replicate bg-remove submit error: {res.text}")
+            return image_base64
+
+        prediction_id = res.json()["id"]
+        for _ in range(24):
+            await asyncio.sleep(3)
+            poll = await client_http.get(
+                f"https://api.replicate.com/v1/predictions/{prediction_id}",
+                headers={"Authorization": f"Token {REPLICATE_KEY}"},
+            )
+            data = poll.json()
+            status = data.get("status")
+            if status == "succeeded":
+                img_res = await client_http.get(data["output"])
+                return base64.b64encode(img_res.content).decode()
+            elif status == "failed":
+                log.error(f"Replicate bg-remove prediction failed: {data.get('error')}")
+                return image_base64
+
+    log.error("Background removal timed out — returning original")
+    return image_base64
+
 # ── Pipeline ──────────────────────────────────────────────────────────────────
 async def upload_to_r2(image_base64: str, filename: str, mime: str = "image/png") -> str:
     """Upload image to Cloudflare R2 using boto3 with proper AWS SigV4 auth.
@@ -808,6 +862,7 @@ async def _process_one_pipeline_image(run_id, idx, total, img_data, platform, ma
     image_b64 = img_data["base64"]
     mime      = img_data.get("mime", "image/jpeg")
     name      = img_data.get("name", "artwork")
+    remove_bg = img_data.get("removeBg", False)
 
     async def set_step(step_label):
         await db.pipeline_runs.update_one(
@@ -815,9 +870,21 @@ async def _process_one_pipeline_image(run_id, idx, total, img_data, platform, ma
             {"$set": {"current_step": f"Image {idx+1} of {total} ({name}): {step_label}"}}
         )
 
+    bg_removed_b64 = checkpoint.get("bg_removed_b64")
     upscaled_b64 = checkpoint.get("upscaled_b64")
     public_url = checkpoint.get("public_url")
     try:
+        if remove_bg and not upscaled_b64:
+            if bg_removed_b64:
+                log.info(f"[{run_id}] {name}: reusing already-background-removed result (checkpoint)")
+                image_b64 = bg_removed_b64
+            else:
+                await set_step("removing background")
+                log.info(f"[{run_id}] Removing background for {name}...")
+                bg_removed_b64 = await remove_background(image_b64, mime)
+                image_b64 = bg_removed_b64
+                mime = "image/png"  # background removal always outputs PNG (transparency)
+
         if upscaled_b64:
             log.info(f"[{run_id}] {name}: reusing already-upscaled result (checkpoint)")
         else:
@@ -845,13 +912,14 @@ async def _process_one_pipeline_image(run_id, idx, total, img_data, platform, ma
             "status": "pending_review",
             "platform": platform,
             "edited": False,
-            "checkpoint": {"upscaled_b64": upscaled_b64, "public_url": public_url},
+            "checkpoint": {"bg_removed_b64": bg_removed_b64, "upscaled_b64": upscaled_b64, "public_url": public_url},
         }
     except Exception as e:
         log.error(f"[{run_id}] Pipeline error for {name}: {e}")
         # Preserve whatever succeeded so a retry can resume instead of restart
         # and re-pay for API calls that already completed.
         preserved = {}
+        if bg_removed_b64: preserved["bg_removed_b64"] = bg_removed_b64
         if upscaled_b64: preserved["upscaled_b64"] = upscaled_b64
         if public_url: preserved["public_url"] = public_url
         return {

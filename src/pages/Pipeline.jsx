@@ -148,6 +148,7 @@ export default function Pipeline() {
       preview: URL.createObjectURL(f),
       base64: await fileToBase64(f),
       mime: f.type,
+      removeBg: false,
     })));
     setImages(prev => [...prev, ...loaded].slice(0, maxImages));
   }, [images.length, maxImages, tier]);
@@ -158,6 +159,7 @@ export default function Pipeline() {
   }, [onFiles]);
 
   const removeImage = (id) => setImages(prev => prev.filter(i => i.id !== id));
+  const toggleRemoveBg = (id) => setImages(prev => prev.map(i => i.id === id ? { ...i, removeBg: !i.removeBg } : i));
 
   // ── Process one image at a time with save-point after each ────────────────
   const pollRun = async (rid, runTotal = total, alreadyDone = completed.length, retryCount = 0) => {
@@ -270,6 +272,7 @@ export default function Pipeline() {
           name: img.name,
           base64: img.base64,
           mime: img.mime,
+          removeBg: !!img.removeBg,
         })),
       };
 
@@ -532,7 +535,15 @@ export default function Pipeline() {
                 {images.map(img => (
                   <div key={img.id} className="relative group rounded-xl overflow-hidden aspect-square bg-[var(--surface-2)]">
                     <img src={img.preview} alt={img.name} className="w-full h-full object-cover" />
-                    <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-end p-2">
+                    <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-between p-2">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); toggleRemoveBg(img.id); }}
+                        className={`self-start text-[10px] px-2 py-1 rounded-full font-semibold transition-colors ${
+                          img.removeBg ? "bg-[var(--raven)] text-white" : "bg-white/15 text-white/80 hover:bg-white/25"
+                        }`}
+                      >
+                        {img.removeBg ? "✓ Remove BG" : "Remove BG"}
+                      </button>
                       <div>
                         <span className="text-[10px] text-white/80 truncate block">{img.name}</span>
                         <span className="text-[10px] text-white/50">{fmtSize(img.size)}</span>
