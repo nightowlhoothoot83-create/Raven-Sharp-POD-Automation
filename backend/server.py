@@ -104,7 +104,7 @@ app.add_middleware(
 
 # ── Tier config ───────────────────────────────────────────────────────────────
 TIERS = {
-    "free":    {"pipeline_runs": 3,     "images_per_run": 1,  "ai_gen_credits": 5,   "scheduling": False,       "bulk_approve": False, "workspaces": 1,     "style_profiles": 0,  "priority": False, "price": 0},
+    "free":    {"pipeline_runs": 3,     "images_per_run": 3,  "ai_gen_credits": 5,   "scheduling": False,       "bulk_approve": False, "workspaces": 1,     "style_profiles": 0,  "priority": False, "price": 0},
     "creator": {"pipeline_runs": 20,    "images_per_run": 10, "ai_gen_credits": 30,  "scheduling": "gen_only",  "bulk_approve": False, "workspaces": 1,     "style_profiles": 3,  "priority": False, "price": 39},
     "growth":  {"pipeline_runs": 35,    "images_per_run": 15, "ai_gen_credits": 60,  "scheduling": "gen_only",  "bulk_approve": False, "workspaces": 1,     "style_profiles": 5,  "priority": False, "price": 69},
     "pro":     {"pipeline_runs": 50,    "images_per_run": 25, "ai_gen_credits": 100, "scheduling": "full",      "bulk_approve": True,  "workspaces": 1,     "style_profiles": 10, "priority": True,  "price": 119},
@@ -247,6 +247,15 @@ async def get_user(request: Request) -> Dict[str, Any]:
         payload = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
         user = await db.users.find_one({"id": payload["sub"]}, {"_id": 0})
         if not user: raise HTTPException(401, "User not found")
+        # Self-heal: an account matching OWNER_EMAIL can end up permanently
+        # stuck on free-tier limits if it was created before OWNER_EMAIL was
+        # configured correctly on Railway (tier is only set at registration
+        # time and never re-checked). Fix it here on every authenticated
+        # request rather than leaving the owner capped.
+        if user.get("email", "").lower() == OWNER_EMAIL.lower() and user.get("tier") != "owner":
+            log.warning(f"Self-healing: {user.get('email')} matches OWNER_EMAIL but had tier={user.get('tier')!r} — upgrading to owner")
+            await db.users.update_one({"id": user["id"]}, {"$set": {"tier": "owner"}})
+            user["tier"] = "owner"
         return user
     except jwt.ExpiredSignatureError:
         raise HTTPException(401, "Token expired")

@@ -72,7 +72,7 @@ export default function Pipeline() {
   const [platformsLoading, setPlatformsLoading] = useState(true);
 
   const tier = user?.tier || "free";
-  const tierLimits = { free: 1, creator: 10, pro: 25, agency: 40, owner: 999 };
+  const tierLimits = { free: 3, creator: 10, pro: 25, agency: 40, owner: 999 };
   const maxImages = tierLimits[tier] || 1;
 
   useEffect(() => () => {

@@ -16,6 +16,7 @@ import ImageGen from "./pages/ImageGen";
 import LegalPage from "./pages/Legal";
 import About from "./pages/About";
 import HealthMonitor from "./pages/HealthMonitor";
+import ErrorBoundary from "./components/ErrorBoundary";
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
@@ -85,10 +86,12 @@ function AppRoutes() {
 
 export default function App() {
   return (
-    <BrowserRouter>
-      <AuthProvider>
-        <AppRoutes />
-      </AuthProvider>
-    </BrowserRouter>
+    <ErrorBoundary>
+      <BrowserRouter>
+        <AuthProvider>
+          <AppRoutes />
+        </AuthProvider>
+      </BrowserRouter>
+    </ErrorBoundary>
   );
 }
