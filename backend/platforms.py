@@ -24,6 +24,95 @@ PRINTIFY_BLUEPRINTS = {
 
 PRINTIFY_AU_PROVIDERS = [99, 98, 88, 1]  # prefer AU/NZ providers
 
+# ── Real provider scoring + smart pricing + mockups ─────────────────────────
+# Ported from RavenSharp-POD-FINAL v5 (the working pre-rebuild HTML tool) —
+# the rebuilt SaaS version had none of this, just a hardcoded
+# print_provider_id: 99 and a flat price_usd fallback.
+
+_provider_cache: dict = {}
+
+async def get_best_provider_for_blueprint(blueprint_id: int, api_key: str) -> Optional[dict]:
+    """Scores every print provider available for a blueprint and picks the
+    best one — same scoring formula as the original tool: prefer known
+    global providers, more variant coverage, lower base cost."""
+    if blueprint_id in _provider_cache:
+        return _provider_cache[blueprint_id]
+
+    headers = {"Authorization": f"Bearer {api_key}"}
+    global_providers = ["Monster Digital", "Printify", "Awkward Styles", "District Photo", "Dimona Tee", "Gelato"]
+
+    async with httpx.AsyncClient(timeout=30) as c:
+        try:
+            res = await c.get(f"https://api.printify.com/v1/catalog/blueprints/{blueprint_id}/print_providers.json", headers=headers)
+            if res.status_code != 200:
+                return None
+            providers = res.json() or []
+            if not providers:
+                return None
+
+            scored = []
+            for prov in providers:
+                try:
+                    v_res = await c.get(
+                        f"https://api.printify.com/v1/catalog/blueprints/{blueprint_id}/print_providers/{prov['id']}/variants.json",
+                        headers=headers)
+                    if v_res.status_code != 200:
+                        continue
+                    variants = v_res.json().get("variants", [])
+                    if not variants:
+                        continue
+                    base_cost_usd = (variants[0].get("cost", 0) or 0) / 100
+                    is_global = any(g in (prov.get("title") or "") for g in global_providers)
+                    scored.append({
+                        "id": prov["id"], "title": prov.get("title", "Unknown Provider"),
+                        "base_cost_usd": base_cost_usd, "variant_count": len(variants),
+                        "variants": variants[:12], "is_global": is_global,
+                        "score": (20 if is_global else 0) + len(variants) - (base_cost_usd * 2),
+                    })
+                except Exception:
+                    continue
+
+            if not scored:
+                return None
+            best = sorted(scored, key=lambda x: x["score"], reverse=True)[0]
+            _provider_cache[blueprint_id] = best
+            return best
+        except Exception:
+            return None
+
+
+def calc_smart_retail(base_cost_usd: float, tier: str = "mid") -> float:
+    """Same formula as the original tool: buffer for worst-case international
+    shipping, enforce a minimum 55% margin, round to .99, then apply the
+    price-tier multiplier and round again."""
+    buffered_cost = base_cost_usd * 1.3
+    min_retail = buffered_cost / (1 - 0.55)
+    import math
+    rounded = math.ceil(min_retail) - 0.01
+    tier_mult = {"budget": 1.0, "mid": 1.2, "premium": 1.5}
+    final = rounded * tier_mult.get(tier, 1.2)
+    return math.ceil(final) - 0.01
+
+
+async def generate_printify_mockup(blueprint_id: int, provider_id: int, variant_id: int,
+                                    image_id: str, api_key: str) -> Optional[str]:
+    """Printify generates the actual product mockup itself — this isn't
+    custom image compositing, just calling their real mockup endpoint."""
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    async with httpx.AsyncClient(timeout=45) as c:
+        try:
+            res = await c.post(
+                f"https://api.printify.com/v1/catalog/blueprints/{blueprint_id}/print_providers/{provider_id}/mockups.json",
+                headers=headers,
+                json={"variant_ids": [variant_id], "images": [{"position": "front", "src": image_id}]},
+            )
+            if res.status_code != 200:
+                return None
+            mockups = res.json().get("mockups", [])
+            return mockups[0].get("mockup_url") if mockups else None
+        except Exception:
+            return None
+
 async def push_printify_full(listing: dict, analysis: dict, image_url: str,
                               api_key: str, shop_id: str) -> dict:
     """Upload image, create products for recommended types, publish to Printify shop"""
@@ -53,6 +142,7 @@ async def push_printify_full(listing: dict, analysis: dict, image_url: str,
             recommended = [{"product": "art print"}, {"product": "poster"}, {"product": "t-shirt"}]
 
         # Step 3: Create product for each recommendation
+        price_tier = analysis.get("price_tier", "mid")
         for rec in recommended[:5]:  # max 5 products per run
             product_name = rec.get("product", "art print").lower().replace(" ", "_")
             blueprint = PRINTIFY_BLUEPRINTS.get(product_name) or \
@@ -60,21 +150,28 @@ async def push_printify_full(listing: dict, analysis: dict, image_url: str,
                               if k in product_name or product_name in k),
                              PRINTIFY_BLUEPRINTS["art_print_a4"])
 
-            # Build variants with pricing
-            base_price = rec.get("price_usd", 29)
+            # Real provider selection + smart pricing (ported from the
+            # original working tool) instead of a hardcoded provider ID and
+            # a flat price fallback.
+            best_provider = await get_best_provider_for_blueprint(blueprint["id"], api_key)
+            provider_id = best_provider["id"] if best_provider else 99  # fall back to the old hardcoded default
+            base_cost_usd = best_provider["base_cost_usd"] if best_provider else 0
+            retail_price = calc_smart_retail(base_cost_usd, price_tier) if best_provider else rec.get("price_usd", 29)
+
+            variant_ids = blueprint["variants"]
             variants = [{"id": vid,
-                          "price": int(base_price * 100),  # Printify uses cents
+                          "price": int(retail_price * 100),  # Printify uses cents
                           "is_enabled": True}
-                        for vid in blueprint["variants"]]
+                        for vid in variant_ids]
 
             product_payload = {
                 "title": analysis.get("seo_title", f"Art Print — {product_name.replace('_',' ').title()}"),
                 "description": analysis.get("description", ""),
                 "blueprint_id": blueprint["id"],
-                "print_provider_id": 99,  # SwiftPOD AU — update after /catalog call
+                "print_provider_id": provider_id,
                 "variants": variants,
                 "print_areas": [{
-                    "variant_ids": blueprint["variants"],
+                    "variant_ids": variant_ids,
                     "placeholders": [{
                         "position": blueprint["position"],
                         "images": [{
@@ -98,6 +195,10 @@ async def push_printify_full(listing: dict, analysis: dict, image_url: str,
 
             product_id = create_res.json()["id"]
 
+            # Real Printify-generated mockup (not custom compositing) —
+            # best-effort, doesn't block publishing if it fails.
+            mockup_url = await generate_printify_mockup(blueprint["id"], provider_id, variant_ids[0], image_id, api_key)
+
             # Step 4: Publish to connected sales channel
             pub_res = await c.post(
                 f"https://api.printify.com/v1/shops/{shop_id}/products/{product_id}/publish.json",
@@ -112,6 +213,11 @@ async def push_printify_full(listing: dict, analysis: dict, image_url: str,
                 "printify_id": product_id,
                 "status": "published" if pub_res.status_code in [200, 201] else "draft",
                 "note": blueprint["note"],
+                "provider": best_provider["title"] if best_provider else "Default (SwiftPOD AU)",
+                "base_cost_usd": round(base_cost_usd, 2),
+                "retail_price": retail_price,
+                "margin_pct": round(((retail_price - base_cost_usd) / retail_price) * 100) if retail_price else None,
+                "mockup_url": mockup_url,
                 "url": f"https://printify.com/app/store/{shop_id}/products/{product_id}"
             })
 
