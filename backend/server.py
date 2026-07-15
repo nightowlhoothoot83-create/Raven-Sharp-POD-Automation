@@ -17,7 +17,8 @@ from PIL import Image
 from platforms import (push_printify_full, push_gelato_full, push_printful_full,
     push_etsy_draft, etsy_auth_url, etsy_exchange_token,
     generate_redbubble_package, generate_teepublic_package,
-    generate_merch_amazon_package, generate_csv_download)
+    generate_merch_amazon_package, generate_csv_download,
+    ARTWORK_TYPE_PRODUCTS, PRINTIFY_BLUEPRINTS)
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
@@ -812,6 +813,30 @@ async def upload_to_r2(image_base64: str, filename: str, mime: str = "image/png"
         log.error(f"R2 upload error: {e}")
         return ""
 
+def _format_artwork_type_guide() -> str:
+    """Renders ARTWORK_TYPE_PRODUCTS (platforms.py) into prompt text, using
+    each blueprint's friendly note instead of its raw dict key."""
+    def label(key: str) -> str:
+        bp = PRINTIFY_BLUEPRINTS.get(key)
+        return bp["note"] if bp else key
+    lines = []
+    type_descriptions = {
+        "A": "Large scenic/atmospheric artwork (landscapes, wide scenes, detailed panoramic compositions)",
+        "B": "Bold graphic/typographic design (text-driven, high contrast, meme-style or slogan art)",
+        "C": "Cute/simple character or icon-style design (small detail, single-subject, kid-friendly)",
+        "D": "Dark/edgy/psychedelic or intricate detailed art (busy detail, moody or surreal style)",
+        "E": "Fine art/photography-style realistic image (photographic detail, painterly realism)",
+    }
+    for t, rules in ARTWORK_TYPE_PRODUCTS.items():
+        lines.append(
+            f"TYPE {t} — {type_descriptions.get(t, '')}\n"
+            f"  MUST include at least one of: {', '.join(label(k) for k in rules['must'])}\n"
+            f"  SHOULD consider: {', '.join(label(k) for k in rules['should'])}\n"
+            f"  AVOID: {', '.join(label(k) for k in rules['avoid'])}"
+        )
+    return "\n".join(lines)
+
+
 async def analyse_with_claude(image_base64: str, mime: str, platform: str,
                                market: str, price_tier: str) -> dict:
     """Claude Vision — analyse image, pick products, write listing copy"""
@@ -829,18 +854,21 @@ Platform: {platform_name}
 Market: {market}
 Price tier: {price_tier}
 
-CRITICAL: product recommendations must be dictated by what this SPECIFIC image actually is —
-its orientation, composition, subject, and detail level — not a generic "popular products" list.
-For example: a wide panoramic or landscape composition suits wall tapestries, canvas prints, or
-large posters, NOT a mug or phone case. A detailed close-up, icon-style, or square-friendly design
-suits mugs, phone cases, stickers, or apparel prints. A tall portrait composition suits phone cases
-or portrait posters over a wide tapestry. If the actual image doesn't suit a product type, do not
-recommend it just because it's commonly popular — every recommendation's "reasoning" field must
-explain specifically why THIS image's shape/content/detail level suits that product, referencing
-the image itself (its orientation, subject, and level of detail), not generic marketing language.
+STEP 1 — Classify this artwork as ONE of these five types (this is based on real research into
+which product categories actually sell well for each artwork style — follow it, don't guess a
+generic list):
+
+{_format_artwork_type_guide()}
+
+STEP 2 — Product recommendations must come from your classified type's MUST/SHOULD lists, and
+must respect its AVOID list. Every recommendation's "reasoning" field must explain specifically why
+THIS image (its actual orientation, subject, and detail level) suits that product — not generic
+marketing language. If none of a type's products genuinely fit this specific image, say so rather
+than forcing a bad match.
 
 Return this exact JSON structure:
 {{
+  "artwork_type": "A" | "B" | "C" | "D" | "E",
   "artwork_description": "brief description of the artwork style, colours, mood, AND orientation/composition (landscape/portrait/square, wide scene vs detailed close-up, etc.)",
   "recommended_products": [
     {{
