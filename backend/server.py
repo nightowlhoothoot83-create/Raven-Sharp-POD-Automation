@@ -12,7 +12,7 @@ from typing import Optional, List, Dict, Any
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from dotenv import load_dotenv
-import os, uuid, json, logging, httpx, base64, bcrypt, jwt, asyncio
+import os, uuid, json, logging, httpx, base64, bcrypt, jwt, asyncio, hmac, hashlib
 from platforms import (push_printify_full, push_gelato_full, push_printful_full,
     push_etsy_draft, etsy_auth_url, etsy_exchange_token,
     generate_redbubble_package, generate_teepublic_package,
@@ -68,6 +68,15 @@ R2_ACCESS_KEY     = os.environ.get("R2_ACCESS_KEY", "")
 R2_SECRET_KEY     = os.environ.get("R2_SECRET_KEY", "")
 R2_BUCKET         = os.environ.get("R2_BUCKET", "adg-images")
 STRIPE_KEY        = os.environ.get("STRIPE_API_KEY", "")
+STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
+if STRIPE_KEY and not STRIPE_WEBHOOK_SECRET:
+    # NOTE: _startup_warnings' print loop already ran above this point in the
+    # file, so appending to that list here would never actually get logged —
+    # logging directly instead.
+    log.warning(
+        "STARTUP: STRIPE_WEBHOOK_SECRET was not set — /billing/webhook will REJECT all events "
+        "(fail-closed) until this is set. Get it from Stripe Dashboard -> Developers -> Webhooks."
+    )
 OWNER_EMAIL       = os.environ.get("OWNER_EMAIL", "ascensiondigitalagency@outlook.com")
 ETSY_API_KEY      = os.environ.get("ETSY_API_KEY", "")
 BACKEND_URL       = os.environ.get("BACKEND_URL", "https://raven-sharp-pod.onrender.com")
@@ -1332,11 +1341,44 @@ async def create_checkout(payload: StripeCheckoutIn, user: dict = Depends(get_us
             raise HTTPException(500, f"Stripe error: {res.text}")
         return {"checkout_url": res.json()["url"]}
 
+def verify_stripe_signature(payload: bytes, sig_header: str, secret: str, tolerance_sec: int = 300) -> bool:
+    """See Book Creator's identical implementation for full explanation.
+    https://docs.stripe.com/webhooks#verify-manually"""
+    if not sig_header or not secret:
+        return False
+    try:
+        parts = dict(item.split("=", 1) for item in sig_header.split(",") if "=" in item)
+        timestamp = parts.get("t")
+        v1 = parts.get("v1")
+        if not timestamp or not v1:
+            return False
+        if abs(datetime.now(timezone.utc).timestamp() - int(timestamp)) > tolerance_sec:
+            log.warning("Stripe webhook rejected: timestamp outside tolerance (possible replay)")
+            return False
+        signed_payload = f"{timestamp}.".encode() + payload
+        expected = hmac.new(secret.encode(), signed_payload, hashlib.sha256).hexdigest()
+        return hmac.compare_digest(expected, v1)
+    except Exception as e:
+        log.warning(f"Stripe signature verification error: {e}")
+        return False
+
+
 @api.post("/billing/webhook")
 async def stripe_webhook(request: Request):
     payload = await request.body()
+
+    if not STRIPE_WEBHOOK_SECRET:
+        # Previously this was a "# In production: verify webhook signature"
+        # comment that was never actually implemented — anyone could POST a
+        # forged event and grant themselves any tier for free. Fail closed.
+        log.error("Webhook rejected: STRIPE_WEBHOOK_SECRET is not configured")
+        raise HTTPException(503, "Webhook not configured — set STRIPE_WEBHOOK_SECRET")
+
     sig = request.headers.get("stripe-signature", "")
-    # In production: verify webhook signature
+    if not verify_stripe_signature(payload, sig, STRIPE_WEBHOOK_SECRET):
+        log.error("Webhook rejected: invalid or missing Stripe-Signature header")
+        raise HTTPException(400, "Invalid signature")
+
     try:
         event = json.loads(payload)
         if event["type"] == "checkout.session.completed":
