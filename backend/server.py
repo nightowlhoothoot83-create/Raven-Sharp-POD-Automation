@@ -12,7 +12,8 @@ from typing import Optional, List, Dict, Any
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from dotenv import load_dotenv
-import os, uuid, json, logging, httpx, base64, bcrypt, jwt, asyncio, hmac, hashlib
+import os, uuid, json, logging, httpx, base64, bcrypt, jwt, asyncio, hmac, hashlib, io
+from PIL import Image
 from platforms import (push_printify_full, push_gelato_full, push_printful_full,
     push_etsy_draft, etsy_auth_url, etsy_exchange_token,
     generate_redbubble_package, generate_teepublic_package,
@@ -828,14 +829,24 @@ Platform: {platform_name}
 Market: {market}
 Price tier: {price_tier}
 
+CRITICAL: product recommendations must be dictated by what this SPECIFIC image actually is —
+its orientation, composition, subject, and detail level — not a generic "popular products" list.
+For example: a wide panoramic or landscape composition suits wall tapestries, canvas prints, or
+large posters, NOT a mug or phone case. A detailed close-up, icon-style, or square-friendly design
+suits mugs, phone cases, stickers, or apparel prints. A tall portrait composition suits phone cases
+or portrait posters over a wide tapestry. If the actual image doesn't suit a product type, do not
+recommend it just because it's commonly popular — every recommendation's "reasoning" field must
+explain specifically why THIS image's shape/content/detail level suits that product, referencing
+the image itself (its orientation, subject, and level of detail), not generic marketing language.
+
 Return this exact JSON structure:
 {{
-  "artwork_description": "brief description of the artwork style, colours, mood",
+  "artwork_description": "brief description of the artwork style, colours, mood, AND orientation/composition (landscape/portrait/square, wide scene vs detailed close-up, etc.)",
   "recommended_products": [
     {{
       "product": "product name",
       "category": "category",
-      "reasoning": "why this artwork suits this product",
+      "reasoning": "specifically why THIS image's orientation/composition/detail level suits this product — not generic",
       "variants": ["variant1", "variant2"],
       "base_cost": 0.00,
       "retail_price": 0.00,
@@ -878,6 +889,73 @@ Tags: max 13 for Etsy, max 15 for Redbubble, unlimited for others."""
         if content.startswith("json"): content = content[4:]
     return json.loads(content.strip())
 
+def apply_dpi_and_bleed(image_b64: str, dpi: int = 300, add_bleed: bool = False) -> str:
+    """Sets the image's actual DPI metadata (so print platforms read the
+    correct print size) and optionally adds bleed padding — ported from the
+    original working tool's formula: 35px of bleed at 300 DPI, scaled
+    proportionally for other DPI targets. This didn't exist anywhere in the
+    rebuilt backend at all — no DPI enforcement, no bleed option."""
+    try:
+        img = Image.open(io.BytesIO(base64.b64decode(image_b64)))
+        if add_bleed:
+            bleed_px = round(35 * (dpi / 300))
+            w, h = img.size
+            canvas = Image.new(img.mode, (w + bleed_px * 2, h + bleed_px * 2),
+                                (255, 255, 255) if img.mode == "RGB" else (0, 0, 0, 0))
+            canvas.paste(img, (bleed_px, bleed_px))
+            img = canvas
+        buf = io.BytesIO()
+        fmt = "PNG" if img.mode == "RGBA" else "JPEG"
+        img.save(buf, format=fmt, dpi=(dpi, dpi), quality=95 if fmt == "JPEG" else None)
+        return base64.b64encode(buf.getvalue()).decode()
+    except Exception as e:
+        log.warning(f"apply_dpi_and_bleed failed, returning original: {e}")
+        return image_b64
+
+
+async def generate_seo_filename(image_b64: str, mime: str, fallback_name: str, niche: str = "") -> str:
+    """Dedicated Claude Vision call just for the filename — separate from
+    analyse_with_claude's seo_title, which is written for a listing, not a
+    filename. Ported prompt style from the original tool: concrete good/bad
+    examples, and a genericness check that falls back to a cleaned-up
+    original filename rather than trusting a vague AI answer."""
+    if not ANTHROPIC_KEY:
+        return fallback_name
+    prompt = (
+        "You are a POD SEO expert. Look at this image carefully and reply with ONE hyphenated "
+        "filename only. No explanation, no preamble, nothing else.\n"
+        + (f"Design niche: {niche}.\n" if niche else "")
+        + "Rules: all lowercase, hyphens only, 5-8 words, describe EXACTLY what you see "
+        "(main subject + colours + art style), end with -pod.\n"
+        "Good: psychedelic-mushroom-rainbow-swirl-trippy-art-pod\n"
+        "Good: banksy-style-corrupt-politician-money-graffiti-pod\n"
+        "Bad: cool-design-artwork-pod (too vague)\n"
+        "Reply with the filename ONLY. No extension. No quotes. No punctuation. Nothing else."
+    )
+    try:
+        async with httpx.AsyncClient(timeout=30) as c:
+            res = await c.post("https://api.anthropic.com/v1/messages",
+                headers={"x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01", "Content-Type": "application/json"},
+                json={"model": "claude-sonnet-5", "max_tokens": 60,
+                      "messages": [{"role": "user", "content": [
+                          {"type": "image", "source": {"type": "base64", "media_type": mime, "data": image_b64}},
+                          {"type": "text", "text": prompt},
+                      ]}]})
+            if res.status_code != 200:
+                return fallback_name
+            raw = "".join(b.get("text", "") for b in res.json().get("content", []) if b.get("type") == "text")
+            import re as _re
+            cleaned = _re.sub(r"[^a-z0-9-]+", "-", _re.sub(r"\.(png|jpe?g|webp)$", "", raw.strip().lower()))
+            cleaned = _re.sub(r"-+", "-", cleaned).strip("-")
+            # Reject vague/generic answers rather than trust them blindly
+            if len(cleaned) > 8 and "artwork-original" not in cleaned and "unique-artwork" not in cleaned:
+                return cleaned
+            return fallback_name
+    except Exception as e:
+        log.warning(f"generate_seo_filename failed, using fallback: {e}")
+        return fallback_name
+
+
 async def _process_one_pipeline_image(run_id, idx, total, img_data, platform, market, price_tier, checkpoint=None):
     """Processes a single image through upscale -> R2 upload -> Claude analysis.
     Each substep result is saved to the DB the moment it completes, and a
@@ -899,6 +977,7 @@ async def _process_one_pipeline_image(run_id, idx, total, img_data, platform, ma
     bg_removed_b64 = checkpoint.get("bg_removed_b64")
     upscaled_b64 = checkpoint.get("upscaled_b64")
     public_url = checkpoint.get("public_url")
+    seo_name = checkpoint.get("seo_name")
     try:
         if remove_bg and not upscaled_b64:
             if bg_removed_b64:
@@ -917,13 +996,22 @@ async def _process_one_pipeline_image(run_id, idx, total, img_data, platform, ma
             await set_step("upscaling")
             log.info(f"[{run_id}] Upscaling {name}...")
             upscaled_b64 = await true_upscale(image_b64, mime, scale=4)
+            upscaled_b64 = apply_dpi_and_bleed(upscaled_b64, dpi=img_data.get("dpi", 300), add_bleed=img_data.get("addBleed", False))
+
+        # Rename BEFORE product choice/listing — the SEO filename step needs
+        # to happen first so the chosen name is what actually gets used for
+        # the uploaded file and can inform the listing that follows.
+        if not seo_name:
+            await set_step("generating SEO filename")
+            log.info(f"[{run_id}] Generating SEO filename for {name}...")
+            seo_name = await generate_seo_filename(upscaled_b64, mime, fallback_name=name)
 
         if public_url:
             log.info(f"[{run_id}] {name}: reusing already-uploaded R2 url (checkpoint)")
         else:
             await set_step("uploading to storage")
-            log.info(f"[{run_id}] Uploading {name} to R2...")
-            public_url = await upload_to_r2(upscaled_b64, f"{uuid.uuid4()}-{name}.png")
+            log.info(f"[{run_id}] Uploading {seo_name} to R2...")
+            public_url = await upload_to_r2(upscaled_b64, f"{uuid.uuid4()}-{seo_name}.png")
 
         await set_step("analysing with Claude Vision")
         log.info(f"[{run_id}] Analysing {name} with Claude Vision...")
@@ -931,14 +1019,16 @@ async def _process_one_pipeline_image(run_id, idx, total, img_data, platform, ma
 
         return {
             "id": checkpoint.get("id") or str(uuid.uuid4()),
-            "name": name,
+            "name": seo_name,
+            "original_name": name,
             "public_url": public_url,
             "upscaled_b64": upscaled_b64[:100] + "...",
             "analysis": analysis,
             "status": "pending_review",
             "platform": platform,
             "edited": False,
-            "checkpoint": {"bg_removed_b64": bg_removed_b64, "upscaled_b64": upscaled_b64, "public_url": public_url},
+            "checkpoint": {"bg_removed_b64": bg_removed_b64, "upscaled_b64": upscaled_b64,
+                          "public_url": public_url, "seo_name": seo_name},
         }
     except Exception as e:
         log.error(f"[{run_id}] Pipeline error for {name}: {e}")
@@ -948,6 +1038,7 @@ async def _process_one_pipeline_image(run_id, idx, total, img_data, platform, ma
         if bg_removed_b64: preserved["bg_removed_b64"] = bg_removed_b64
         if upscaled_b64: preserved["upscaled_b64"] = upscaled_b64
         if public_url: preserved["public_url"] = public_url
+        if seo_name: preserved["seo_name"] = seo_name
         return {
             "id": checkpoint.get("id") or str(uuid.uuid4()),
             "name": name,
