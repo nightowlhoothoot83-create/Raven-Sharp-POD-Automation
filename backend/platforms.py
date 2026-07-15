@@ -10,16 +10,72 @@ from typing import Optional
 # Full product creation: upload image → find best provider → create product → publish
 
 PRINTIFY_BLUEPRINTS = {
-    "t-shirt":      {"id": 5,   "variants": [17887, 17888, 17889, 17890],   "position": "front", "note": "Unisex Softstyle T-Shirt"},
-    "hoodie":       {"id": 92,  "variants": [52743, 52744, 52745, 52746],   "position": "front", "note": "Unisex Heavy Blend Hoodie"},
-    "art_print_a4": {"id": 681, "variants": [65763],                         "position": "front", "note": "Premium Luster Photo Paper Poster 12x16"},
-    "poster":       {"id": 400, "variants": [43435],                         "position": "front", "note": "Enhanced Matte Paper Poster"},
-    "canvas":       {"id": 638, "variants": [48985],                         "position": "front", "note": "Canvas"},
-    "mug":          {"id": 19,  "variants": [1441, 1442],                    "position": "front", "note": "White Glossy Mug"},
-    "tote_bag":     {"id": 623, "variants": [62021, 62022],                  "position": "front", "note": "Heavy Tote Bag"},
-    "phone_case":   {"id": 25,  "variants": [2010, 2011],                    "position": "back",  "note": "Tough Phone Case"},
-    "sticker":      {"id": 505, "variants": [48050],                         "position": "front", "note": "Kiss-Cut Stickers"},
-    "pillow":       {"id": 66,  "variants": [7023, 7024],                    "position": "front", "note": "Throw Pillow"},
+    # APPAREL
+    "t_shirt":          {"id": 6,   "position": "front", "note": "Unisex T-Shirt"},
+    "hoodie":           {"id": 77,  "position": "front", "note": "Pullover Hoodie"},
+    "sweatshirt":       {"id": 167, "position": "front", "note": "Crewneck Sweatshirt"},
+    "womens_t_shirt":   {"id": 357, "position": "front", "note": "Women's T-Shirt"},
+    "kids_t_shirt":     {"id": 9,   "position": "front", "note": "Kids T-Shirt"},
+    "tank_top":         {"id": 295, "position": "front", "note": "Tank Top"},
+    "long_sleeve":      {"id": 246, "position": "front", "note": "Long Sleeve Shirt"},
+    "cap":              {"id": 210, "position": "front", "note": "Baseball Cap"},
+    "beanie":           {"id": 100, "position": "front", "note": "Beanie"},
+    "socks":            {"id": 228, "position": "front", "note": "Socks"},
+    # WALL ART
+    "art_print_poster": {"id": 1,   "position": "front", "note": "Art Print Poster"},
+    "canvas":           {"id": 16,  "position": "front", "note": "Stretched Canvas"},
+    "framed_poster":    {"id": 461, "position": "front", "note": "Framed Poster"},
+    "tapestry":         {"id": 459, "position": "front", "note": "Tapestry"},
+    "metal_print":      {"id": 347, "position": "front", "note": "Metal Print"},
+    "acrylic_print":    {"id": 348, "position": "front", "note": "Acrylic Print"},
+    # HOME & LIVING
+    "mug":              {"id": 45,  "position": "front", "note": "Ceramic Mug (11oz)"},
+    "magic_mug":        {"id": 203, "position": "front", "note": "Magic Colour-Changing Mug"},
+    "pillow":           {"id": 168, "position": "front", "note": "Throw Pillow"},
+    "blanket":          {"id": 384, "position": "front", "note": "Blanket"},
+    "beach_towel":      {"id": 412, "position": "front", "note": "Beach Towel"},
+    "tea_towel":        {"id": 490, "position": "front", "note": "Tea Towel"},
+    "wall_clock":       {"id": 530, "position": "front", "note": "Wall Clock"},
+    # STATIONERY & ACCESSORIES
+    "sticker":          {"id": 148, "position": "front", "note": "Sticker Sheet"},
+    "die_cut_sticker":  {"id": 512, "position": "front", "note": "Die-Cut Sticker"},
+    "notebook":         {"id": 180, "position": "front", "note": "Spiral Notebook / Journal"},
+    "hardcover_journal":{"id": 521, "position": "front", "note": "Hardcover Journal"},
+    "wall_calendar":    {"id": 526, "position": "front", "note": "Wall Calendar"},
+    "desk_calendar":    {"id": 527, "position": "front", "note": "Desk Calendar"},
+    "greeting_cards":   {"id": 199, "position": "front", "note": "Greeting Cards (set of 10)"},
+    # BAGS
+    "tote_bag":         {"id": 92,  "position": "front", "note": "Tote Bag"},
+    "drawstring_bag":   {"id": 381, "position": "front", "note": "Drawstring Bag"},
+    "fanny_pack":       {"id": 435, "position": "front", "note": "Fanny Pack"},
+    # TECH
+    "phone_case":       {"id": 370, "position": "back",  "note": "Phone Case"},
+    "laptop_sleeve":    {"id": 382, "position": "front", "note": "Laptop Sleeve"},
+    # PRINTS & SPECIALTY
+    "puzzle":           {"id": 523, "position": "front", "note": "Puzzle (252 piece)"},
+    "playing_cards":    {"id": 378, "position": "front", "note": "Playing Cards"},
+    "pet_bowl":         {"id": 391, "position": "front", "note": "Pet Bowl"},
+    "apron":            {"id": 443, "position": "front", "note": "Apron"},
+}
+
+# Which product types each artwork TYPE (A-E, see analyse_with_claude's prompt)
+# should draw from — mirrors the original researched MUST/SHOULD/AVOID rules.
+ARTWORK_TYPE_PRODUCTS = {
+    "A": {"must": ["art_print_poster", "canvas", "tapestry"],
+          "should": ["framed_poster", "hardcover_journal", "pillow", "blanket", "puzzle", "phone_case"],
+          "avoid": ["pet_bowl", "apron", "kids_t_shirt"]},
+    "B": {"must": ["t_shirt", "art_print_poster"],
+          "should": ["hoodie", "tote_bag", "sticker", "die_cut_sticker", "mug", "phone_case"],
+          "avoid": ["tapestry", "canvas"]},
+    "C": {"must": ["t_shirt", "kids_t_shirt", "sticker"],
+          "should": ["tote_bag", "mug", "die_cut_sticker", "greeting_cards", "phone_case"],
+          "avoid": ["tapestry", "metal_print"]},
+    "D": {"must": ["tapestry", "art_print_poster", "hoodie"],
+          "should": ["canvas", "hardcover_journal", "playing_cards", "puzzle", "blanket", "phone_case"],
+          "avoid": ["kids_t_shirt", "greeting_cards", "desk_calendar"]},
+    "E": {"must": ["canvas", "art_print_poster", "metal_print", "acrylic_print"],
+          "should": ["framed_poster", "pillow", "phone_case"],
+          "avoid": ["sticker", "kids_t_shirt", "apron"]},
 }
 
 PRINTIFY_AU_PROVIDERS = [99, 98, 88, 1]  # prefer AU/NZ providers
@@ -113,6 +169,27 @@ async def generate_printify_mockup(blueprint_id: int, provider_id: int, variant_
         except Exception:
             return None
 
+def _match_blueprint_key(product_name_raw: str) -> Optional[str]:
+    """Matches an AI-recommended product name to a real catalog entry —
+    exact match first, then keyword overlap. Returns None (never a forced
+    generic fallback) if nothing reasonably matches, so the caller can skip
+    it rather than substitute something that might not suit the artwork."""
+    key = product_name_raw.lower().strip().replace(" ", "_").replace("-", "_")
+    if key in PRINTIFY_BLUEPRINTS:
+        return key
+    # keyword-overlap fallback (e.g. "wall tapestry" -> "tapestry")
+    for k in PRINTIFY_BLUEPRINTS:
+        if k in key or key in k:
+            return k
+    words = set(key.split("_"))
+    best_key, best_overlap = None, 0
+    for k in PRINTIFY_BLUEPRINTS:
+        overlap = len(words & set(k.split("_")))
+        if overlap > best_overlap:
+            best_key, best_overlap = k, overlap
+    return best_key if best_overlap > 0 else None
+
+
 async def push_printify_full(listing: dict, analysis: dict, image_url: str,
                               api_key: str, shop_id: str) -> dict:
     """Upload image, create products for recommended types, publish to Printify shop"""
@@ -139,33 +216,53 @@ async def push_printify_full(listing: dict, analysis: dict, image_url: str,
         # Step 2: Get recommended products from Claude analysis
         recommended = analysis.get("recommended_products", [])
         if not recommended:
-            recommended = [{"product": "art print"}, {"product": "poster"}, {"product": "t-shirt"}]
+            recommended = [{"product": "art print"}, {"product": "poster"}, {"product": "t_shirt"}]
 
         # Step 3: Create product for each recommendation
         price_tier = analysis.get("price_tier", "mid")
-        for rec in recommended[:5]:  # max 5 products per run
-            product_name = rec.get("product", "art print").lower().replace(" ", "_")
-            blueprint = PRINTIFY_BLUEPRINTS.get(product_name) or \
-                        next((v for k, v in PRINTIFY_BLUEPRINTS.items()
-                              if k in product_name or product_name in k),
-                             PRINTIFY_BLUEPRINTS["art_print_a4"])
+        for rec in recommended[:8]:  # up to 8 products per run now that the catalog is fuller
+            product_name_raw = rec.get("product", "art print")
+            blueprint_key = _match_blueprint_key(product_name_raw)
+            if not blueprint_key:
+                published.append({"product": product_name_raw, "status": "skipped",
+                                   "reason": "No matching product in the researched catalog — not substituted with a generic fallback."})
+                continue
+            blueprint = PRINTIFY_BLUEPRINTS[blueprint_key]
 
             # Real provider selection + smart pricing (ported from the
             # original working tool) instead of a hardcoded provider ID and
             # a flat price fallback.
             best_provider = await get_best_provider_for_blueprint(blueprint["id"], api_key)
-            provider_id = best_provider["id"] if best_provider else 99  # fall back to the old hardcoded default
-            base_cost_usd = best_provider["base_cost_usd"] if best_provider else 0
-            retail_price = calc_smart_retail(base_cost_usd, price_tier) if best_provider else rec.get("price_usd", 29)
+            if not best_provider:
+                # This is the actual fix for the 80% failure rate diagnosed
+                # previously: forcing a push with a guessed/default provider
+                # (print_provider_id: 99) when no provider was actually
+                # confirmed available is exactly what caused most publishes
+                # to fail silently. Skip instead of forcing it through.
+                published.append({"product": blueprint_key, "status": "skipped",
+                                   "reason": f"No available print provider found for {blueprint['note']} — not force-pushed with a guessed provider."})
+                continue
 
-            variant_ids = blueprint["variants"]
+            provider_id = best_provider["id"]
+            base_cost_usd = best_provider["base_cost_usd"]
+            retail_price = calc_smart_retail(base_cost_usd, price_tier)
+
+            # Live variant IDs from the ACTUAL chosen provider — never
+            # hardcoded, since a hardcoded variant ID has no guarantee of
+            # matching what this specific provider actually offers.
+            variant_ids = [v["id"] for v in best_provider["variants"]]
+            if not variant_ids:
+                published.append({"product": blueprint_key, "status": "skipped",
+                                   "reason": "Provider returned no usable variants."})
+                continue
+
             variants = [{"id": vid,
                           "price": int(retail_price * 100),  # Printify uses cents
                           "is_enabled": True}
                         for vid in variant_ids]
 
             product_payload = {
-                "title": analysis.get("seo_title", f"Art Print — {product_name.replace('_',' ').title()}"),
+                "title": analysis.get("seo_title", f"Art Print — {blueprint_key.replace('_',' ').title()}"),
                 "description": analysis.get("description", ""),
                 "blueprint_id": blueprint["id"],
                 "print_provider_id": provider_id,
@@ -189,7 +286,7 @@ async def push_printify_full(listing: dict, analysis: dict, image_url: str,
                 headers=headers, json=product_payload
             )
             if create_res.status_code not in [200, 201]:
-                published.append({"product": product_name, "status": "failed",
+                published.append({"product": blueprint_key, "status": "failed",
                                    "error": create_res.text[:200]})
                 continue
 
@@ -209,11 +306,11 @@ async def push_printify_full(listing: dict, analysis: dict, image_url: str,
             )
 
             published.append({
-                "product": product_name,
+                "product": blueprint_key,
                 "printify_id": product_id,
                 "status": "published" if pub_res.status_code in [200, 201] else "draft",
                 "note": blueprint["note"],
-                "provider": best_provider["title"] if best_provider else "Default (SwiftPOD AU)",
+                "provider": best_provider["title"],
                 "base_cost_usd": round(base_cost_usd, 2),
                 "retail_price": retail_price,
                 "margin_pct": round(((retail_price - base_cost_usd) / retail_price) * 100) if retail_price else None,
