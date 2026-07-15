@@ -79,7 +79,12 @@ if STRIPE_KEY and not STRIPE_WEBHOOK_SECRET:
     )
 OWNER_EMAIL       = os.environ.get("OWNER_EMAIL", "ascensiondigitalagency@outlook.com")
 ETSY_API_KEY      = os.environ.get("ETSY_API_KEY", "")
-BACKEND_URL       = os.environ.get("BACKEND_URL", "https://raven-sharp-pod.onrender.com")
+BACKEND_URL       = os.environ.get("BACKEND_URL", "")
+if not BACKEND_URL:
+    log.warning(
+        "STARTUP: BACKEND_URL was not set — Etsy Connect's OAuth redirect will be malformed "
+        "until this is set to this service's real public Railway URL."
+    )
 FRONTEND_URL      = os.environ.get("FRONTEND_URL", "https://pod.raven-sharp.com")
 CORS_ORIGINS      = [
     origin.strip()
@@ -620,11 +625,15 @@ async def get_gen_batch(batch_id: str, user: dict = Depends(get_user)):
         raise HTTPException(404, "Batch not found")
     return batch
 
+class RetryImageIn(BaseModel):
+    prompt: Optional[str] = None  # if provided, overrides the batch's original prompt for this regeneration
+
 @api.post("/image-gen/{batch_id}/retry/{index}")
-async def retry_image(batch_id: str, index: int, background_tasks: BackgroundTasks,
+async def retry_image(batch_id: str, index: int, payload: RetryImageIn, background_tasks: BackgroundTasks,
                        user: dict = Depends(get_user)):
     """Re-generate just one failed image from a batch, without re-running
-    or re-charging for the whole thing."""
+    or re-charging for the whole thing. Pass a new `prompt` to actually
+    refine the image instead of just re-rolling the same one."""
     if not check_tier_limit(user, "ai_gen_credits"):
         raise HTTPException(403, "AI generation credits exhausted for this month")
 
@@ -633,13 +642,21 @@ async def retry_image(batch_id: str, index: int, background_tasks: BackgroundTas
     if not batch:
         raise HTTPException(404, "Batch not found")
 
-    full_prompt = batch.get("prompt", "")
+    full_prompt = payload.prompt.strip() if payload.prompt and payload.prompt.strip() else batch.get("prompt", "")
     dims = batch.get("dims", {"width": 1024, "height": 1024})
+
+    # Remember the edited prompt so a future retry (or just viewing this
+    # image's history) reflects what was actually asked for, not the batch's
+    # original stale prompt.
+    if payload.prompt and payload.prompt.strip():
+        await db.image_gen_batches.update_one(
+            {"id": batch_id}, {"$set": {f"prompt_overrides.{index}": full_prompt}}
+        )
 
     background_tasks.add_task(_retry_single_image, batch_id, index, full_prompt, dims)
     await db.users.update_one({"id": user["id"]}, {"$inc": {"ai_gen_credits_used": 1}})
 
-    return {"status": "retrying", "index": index}
+    return {"status": "retrying", "index": index, "prompt_used": full_prompt}
 
 @api.post("/image-gen/{batch_id}/approve")
 async def approve_gen_batch(batch_id: str, approved_ids: List[int],
@@ -1218,7 +1235,7 @@ async def get_etsy_auth_url(user: dict = Depends(get_user)):
         raise HTTPException(503, "Etsy Connect is not configured yet. Add ETSY_API_KEY to the backend environment.")
     if not api_key:
         raise HTTPException(500, "Etsy API key not configured — add ETSY_API_KEY to environment")
-    redirect_uri = f"{os.environ.get('BACKEND_URL', 'https://raven-sharp-pod.onrender.com')}/api/etsy/callback"
+    redirect_uri = f"{BACKEND_URL}/api/etsy/callback"
     result = etsy_auth_url(user["id"], redirect_uri, api_key)
     # Store code_verifier temporarily
     await db.users.update_one({"id": user["id"]},
@@ -1233,7 +1250,7 @@ async def etsy_callback(code: str, state: str):
     if not user:
         raise HTTPException(400, "Invalid OAuth state — try connecting Etsy again")
     api_key = os.environ.get("ETSY_API_KEY", "")
-    redirect_uri = f"{os.environ.get('BACKEND_URL', 'https://raven-sharp-pod.onrender.com')}/api/etsy/callback"
+    redirect_uri = f"{BACKEND_URL}/api/etsy/callback"
     tokens = await etsy_exchange_token(code, user["etsy_code_verifier"], redirect_uri, api_key)
     # Get their shop ID
     async with httpx.AsyncClient(timeout=20) as c:

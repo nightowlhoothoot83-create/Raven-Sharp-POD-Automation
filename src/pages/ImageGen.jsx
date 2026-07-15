@@ -3,7 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import api from "../lib/api";
 import ADGFooter from "../components/ADGFooter";
-import { Wand2, Plus, Sparkles, Check, X, Trash2, ChevronRight, Zap, Download, UploadCloud } from "lucide-react";
+import { Wand2, Plus, Sparkles, Check, X, Trash2, ChevronRight, Zap, Download, UploadCloud, Pencil, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 
 const ASPECT_RATIOS = [
@@ -32,6 +32,8 @@ export default function ImageGen() {
   });
   const [creatingProfile, setCreatingProfile] = useState(false);
   const [moodInput, setMoodInput] = useState("");
+  const [editingImage, setEditingImage] = useState(null); // { batchId, index, prompt } | null
+  const [regenerating, setRegenerating] = useState(false);
 
   const tier = user?.tier || "free";
   const genUsed  = user?.ai_gen_credits_used || 0;
@@ -113,6 +115,24 @@ export default function ImageGen() {
     await api.post(`/image-gen/${batchId}/approve`, approvedIds);
     setBatches(prev => prev.map(b => b.id === batchId ? { ...b, status:"approved" } : b));
     toast.success("Images approved — send to pipeline from Dashboard");
+  };
+
+  const regenerateWithPrompt = async () => {
+    if (!editingImage) return;
+    setRegenerating(true);
+    try {
+      await api.post(`/image-gen/${editingImage.batchId}/retry/${editingImage.index}`, {
+        prompt: editingImage.prompt,
+      });
+      toast.success("Regenerating with your edited prompt...");
+      setEditingImage(null);
+      const { data: newBatches } = await api.get("/image-gen/batches");
+      setBatches(newBatches);
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Regeneration failed");
+    } finally {
+      setRegenerating(false);
+    }
   };
 
   const profileLimits = { free:0, creator:3, pro:10, agency:-1, owner:-1 };
@@ -348,6 +368,11 @@ export default function ImageGen() {
                           </div>
                           <div className="p-3 flex flex-wrap gap-2">
                             <button
+                              onClick={() => setEditingImage({ batchId: batch.id, index: i, prompt: batch.prompt_overrides?.[i] || batch.prompt || "" })}
+                              className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-white/5 text-[var(--muted)] text-xs font-semibold border border-white/10 hover:text-[var(--text)] hover:bg-white/10 transition-all">
+                              <Pencil className="w-3.5 h-3.5" /> Edit Prompt
+                            </button>
+                            <button
                               onClick={() => imageToPipeline(img, i)}
                               className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-[var(--raven)] text-white text-xs font-semibold hover:bg-[var(--raven-glow)] transition-all">
                               <UploadCloud className="w-3.5 h-3.5" /> Use in Pipeline
@@ -376,6 +401,37 @@ export default function ImageGen() {
           </div>
         )}
       </div>
+
+      {editingImage && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" onClick={() => !regenerating && setEditingImage(null)}>
+          <div className="w-full max-w-lg rounded-2xl bg-[var(--surface)] border border-white/10 p-5" onClick={e => e.stopPropagation()}>
+            <h3 className="font-display text-lg font-bold mb-3">Edit Prompt & Regenerate</h3>
+            <textarea
+              value={editingImage.prompt}
+              onChange={e => setEditingImage(prev => ({ ...prev, prompt: e.target.value }))}
+              rows={5}
+              className="w-full rounded-xl bg-black/20 border border-white/10 p-3 text-sm text-[var(--text)] resize-vertical"
+              placeholder="Describe what you want this image to look like..."
+            />
+            <div className="flex gap-2 mt-4">
+              <button
+                onClick={regenerateWithPrompt}
+                disabled={regenerating || !editingImage.prompt.trim()}
+                className="flex-1 flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-lg bg-[var(--raven)] text-white text-sm font-semibold hover:bg-[var(--raven-glow)] transition-all disabled:opacity-50">
+                <RefreshCw className={`w-4 h-4 ${regenerating ? "animate-spin" : ""}`} />
+                {regenerating ? "Regenerating..." : "Regenerate with New Prompt"}
+              </button>
+              <button
+                onClick={() => setEditingImage(null)}
+                disabled={regenerating}
+                className="px-4 py-2.5 rounded-lg bg-white/5 text-[var(--muted)] text-sm font-semibold border border-white/10 hover:text-[var(--text)] transition-all">
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <ADGFooter />
     </div>
   );
