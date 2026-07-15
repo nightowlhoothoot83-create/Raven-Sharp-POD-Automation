@@ -170,24 +170,10 @@ async def generate_printify_mockup(blueprint_id: int, provider_id: int, variant_
             return None
 
 def _match_blueprint_key(product_name_raw: str) -> Optional[str]:
-    """Matches an AI-recommended product name to a real catalog entry —
-    exact match first, then keyword overlap. Returns None (never a forced
-    generic fallback) if nothing reasonably matches, so the caller can skip
-    it rather than substitute something that might not suit the artwork."""
-    key = product_name_raw.lower().strip().replace(" ", "_").replace("-", "_")
-    if key in PRINTIFY_BLUEPRINTS:
-        return key
-    # keyword-overlap fallback (e.g. "wall tapestry" -> "tapestry")
-    for k in PRINTIFY_BLUEPRINTS:
-        if k in key or key in k:
-            return k
-    words = set(key.split("_"))
-    best_key, best_overlap = None, 0
-    for k in PRINTIFY_BLUEPRINTS:
-        overlap = len(words & set(k.split("_")))
-        if overlap > best_overlap:
-            best_key, best_overlap = k, overlap
-    return best_key if best_overlap > 0 else None
+    """Matches an AI-recommended product name to a real Printify catalog
+    entry. Never forces a generic fallback — returns None if nothing
+    reasonably matches, so the caller can skip it."""
+    return _match_catalog_key(product_name_raw, PRINTIFY_BLUEPRINTS)
 
 
 async def push_printify_full(listing: dict, analysis: dict, image_url: str,
@@ -337,6 +323,25 @@ GELATO_UIDS = {
     "framed":     "frame_product_pf_a3_pt_200-gsm-matte_cl_4-0_ct_none_prt_none_sft_none_set_none_ver",
 }
 
+def _match_catalog_key(product_name_raw: str, catalog: dict) -> Optional[str]:
+    """Generic version of the matcher used for Printify — exact match, then
+    keyword overlap, returns None (never a forced default) if nothing
+    reasonably matches."""
+    key = product_name_raw.lower().strip().replace(" ", "_").replace("-", "_")
+    if key in catalog:
+        return key
+    for k in catalog:
+        if k in key or key in k:
+            return k
+    words = set(key.split("_"))
+    best_key, best_overlap = None, 0
+    for k in catalog:
+        overlap = len(words & set(k.split("_")))
+        if overlap > best_overlap:
+            best_key, best_overlap = k, overlap
+    return best_key if best_overlap > 0 else None
+
+
 async def push_gelato_full(listing: dict, analysis: dict, image_url: str,
                             api_key: str, store_id: str,
                             template_ids: Optional[dict] = None) -> dict:
@@ -354,9 +359,12 @@ async def push_gelato_full(listing: dict, analysis: dict, image_url: str,
 
     async with httpx.AsyncClient(timeout=60) as c:
         for rec in recommended[:5]:
-            product_name = rec.get("product", "art print").lower().replace(" ", "_")
-            uid_key = next((k for k in GELATO_UIDS if k in product_name or product_name in k),
-                           "art_print")
+            product_name_raw = rec.get("product", "art print")
+            uid_key = _match_catalog_key(product_name_raw, GELATO_UIDS)
+            if not uid_key:
+                published.append({"product": product_name_raw, "status": "skipped",
+                                   "reason": "No matching product in the Gelato catalog — not substituted with a generic fallback."})
+                continue
             uid = GELATO_UIDS[uid_key]
             price_cents = int(rec.get("price_usd", 29) * 100)
 
