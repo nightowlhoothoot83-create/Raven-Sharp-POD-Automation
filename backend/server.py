@@ -63,6 +63,8 @@ for _w in _startup_warnings:
 
 ANTHROPIC_KEY     = os.environ.get("ANTHROPIC_API_KEY", "")
 REPLICATE_KEY     = os.environ.get("REPLICATE_API_KEY", "")
+RUNWARE_API_KEY   = os.environ.get("RUNWARE_API_KEY", "")
+RUNWARE_MODEL     = os.environ.get("RUNWARE_MODEL", "runware:101@1")  # verify/pick exact model in your Runware dashboard's model browser
 # Image generation uses Replicate FLUX.1 — same key as upscaling
 # REPLICATE_KEY handles both upscaling (Real-ESRGAN) and image gen (FLUX.1)
 R2_ENDPOINT       = os.environ.get("R2_ENDPOINT", "")  # https://<account_id>.r2.cloudflarestorage.com
@@ -183,6 +185,7 @@ class StyleProfileIn(BaseModel):
     aspect_ratio: Optional[str] = "square"
     colour_palette: Optional[str] = ""
     mood_tags: Optional[List[str]] = []
+    reference_image_url: Optional[str] = None  # if set, generation uses Runware (real character-consistency support) instead of FLUX Schnell (which has none)
 
 class PipelineRunIn(BaseModel):
     platform: str
@@ -408,6 +411,7 @@ async def create_profile(payload: StyleProfileIn, user: dict = Depends(get_user)
                "aspect_ratio": payload.aspect_ratio,
                "colour_palette": payload.colour_palette,
                "mood_tags": payload.mood_tags,
+               "reference_image_url": payload.reference_image_url,
                "created_at": datetime.now(timezone.utc)}
     await db.style_profiles.insert_one(profile)
     profile.pop("_id", None)
@@ -424,10 +428,54 @@ async def delete_profile(profile_id: str, user: dict = Depends(get_user)):
     return {"ok": True}
 
 # ── AI Image Generation ───────────────────────────────────────────────────────
+async def call_runware_image(prompt: str, width: int, height: int,
+                              reference_image_url: Optional[str] = None) -> Optional[dict]:
+    """Real character-consistency support via Runware's referenceImages
+    parameter — FLUX Schnell (this app's default generator) has no such
+    mechanism at all, so this is a genuine capability gap-fill, not just an
+    alternative provider. Verify RUNWARE_MODEL against your dashboard's
+    model browser — 'runware:101@1' is a placeholder default."""
+    if not RUNWARE_API_KEY:
+        return None
+    task = {
+        "taskType": "imageInference",
+        "taskUUID": str(uuid.uuid4()),
+        "model": RUNWARE_MODEL,
+        "positivePrompt": prompt,
+        "width": width, "height": height,
+        "numberResults": 1,
+        "outputType": "URL",
+    }
+    if reference_image_url:
+        task["referenceImages"] = [reference_image_url]
+    try:
+        async with httpx.AsyncClient(timeout=90) as c:
+            res = await c.post(
+                "https://api.runware.ai/v1",
+                headers={"Authorization": f"Bearer {RUNWARE_API_KEY}", "Content-Type": "application/json"},
+                json=[task],
+            )
+            if res.status_code != 200:
+                log.error(f"Runware error {res.status_code}: {res.text[:300]}")
+                return None
+            data = res.json()
+            results = data.get("data", data) if isinstance(data, dict) else data
+            if isinstance(results, list) and results:
+                return {"image_url": results[0].get("imageURL")}
+            return None
+    except Exception as e:
+        log.error(f"Runware call failed: {e}")
+        return None
+
+
 async def _process_image_gen(batch_id: str, user_id: str, full_prompt: str,
-                              negative: str, dims: dict, quantity: int):
+                              negative: str, dims: dict, quantity: int,
+                              reference_image_url: Optional[str] = None):
     """Background worker for image generation. Saves progress after EVERY image,
-    not just at the end — so a slow/failed generation never loses earlier results."""
+    not just at the end — so a slow/failed generation never loses earlier results.
+    Uses Runware (real character-consistency support) when a reference image is
+    set on the style profile; falls back to FLUX Schnell otherwise (cheaper,
+    but FLUX has no reference-image mechanism at all)."""
     generated = []
     total = min(quantity, 10)
     async with httpx.AsyncClient(timeout=180) as client_http:
@@ -437,6 +485,24 @@ async def _process_image_gen(batch_id: str, user_id: str, full_prompt: str,
                 {"$set": {"current_step": f"Submitting image {i+1} of {total}...",
                            "current_index": i}}
             )
+
+            if reference_image_url and RUNWARE_API_KEY:
+                runware_result = await call_runware_image(full_prompt, dims["width"], dims["height"], reference_image_url)
+                if runware_result and runware_result.get("image_url"):
+                    try:
+                        img_res = await client_http.get(runware_result["image_url"])
+                        if img_res.is_success:
+                            generated.append({"index": i, "base64": base64.b64encode(img_res.content).decode(), "provider": "runware"})
+                            await db.image_gen_batches.update_one(
+                                {"id": batch_id},
+                                {"$push": {"images": generated[-1]}}
+                            )
+                            continue
+                    except Exception as e:
+                        log.warning(f"[{batch_id}] Runware result fetch failed, falling back to FLUX: {e}")
+                else:
+                    log.warning(f"[{batch_id}] Runware generation failed, falling back to FLUX for image {i+1}")
+
             try:
                 res = await client_http.post(
                     "https://api.replicate.com/v1/models/black-forest-labs/flux-schnell/predictions",
@@ -607,7 +673,8 @@ async def generate_images(payload: ImageGenIn, background_tasks: BackgroundTasks
 
     background_tasks.add_task(
         _process_image_gen, batch_id, user["id"],
-        full_prompt, negative, dims, payload.quantity
+        full_prompt, negative, dims, payload.quantity,
+        profile.get("reference_image_url") if profile else None
     )
 
     return {"batch_id": batch_id, "status": "processing",
