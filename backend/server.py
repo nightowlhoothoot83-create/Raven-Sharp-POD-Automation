@@ -62,11 +62,10 @@ for _w in _startup_warnings:
     log.warning("STARTUP: %s", _w)
 
 ANTHROPIC_KEY     = os.environ.get("ANTHROPIC_API_KEY", "")
-REPLICATE_KEY     = os.environ.get("REPLICATE_API_KEY", "")
 RUNWARE_API_KEY   = os.environ.get("RUNWARE_API_KEY", "")
-RUNWARE_MODEL     = os.environ.get("RUNWARE_MODEL", "runware:101@1")  # verify/pick exact model in your Runware dashboard's model browser
-# Image generation uses Replicate FLUX.1 — same key as upscaling
-# REPLICATE_KEY handles both upscaling (Real-ESRGAN) and image gen (FLUX.1)
+RUNWARE_MODEL     = os.environ.get("RUNWARE_MODEL", "runware:101@1")  # image generation — verify/pick exact model in your Runware dashboard's model browser
+RUNWARE_UPSCALE_MODEL = os.environ.get("RUNWARE_UPSCALE_MODEL", "runware:502@1")  # verify against your dashboard
+RUNWARE_BGREMOVE_MODEL = os.environ.get("RUNWARE_BGREMOVE_MODEL", "runware:110@1")  # verify against your dashboard
 R2_ENDPOINT       = os.environ.get("R2_ENDPOINT", "")  # https://<account_id>.r2.cloudflarestorage.com
 R2_ACCESS_KEY     = os.environ.get("R2_ACCESS_KEY", "")
 R2_SECRET_KEY     = os.environ.get("R2_SECRET_KEY", "")
@@ -473,90 +472,34 @@ async def _process_image_gen(batch_id: str, user_id: str, full_prompt: str,
                               reference_image_url: Optional[str] = None):
     """Background worker for image generation. Saves progress after EVERY image,
     not just at the end — so a slow/failed generation never loses earlier results.
-    Uses Runware (real character-consistency support) when a reference image is
-    set on the style profile; falls back to FLUX Schnell otherwise (cheaper,
-    but FLUX has no reference-image mechanism at all)."""
+    Uses Runware for all generation (replaced Replicate/FLUX entirely) — passes
+    reference_image_url through for real character consistency when a style
+    profile has one set."""
     generated = []
     total = min(quantity, 10)
     async with httpx.AsyncClient(timeout=180) as client_http:
         for i in range(total):
             await db.image_gen_batches.update_one(
                 {"id": batch_id},
-                {"$set": {"current_step": f"Submitting image {i+1} of {total}...",
+                {"$set": {"current_step": f"Generating image {i+1} of {total} (Runware)...",
                            "current_index": i}}
             )
-
-            if reference_image_url and RUNWARE_API_KEY:
+            try:
                 runware_result = await call_runware_image(full_prompt, dims["width"], dims["height"], reference_image_url)
                 if runware_result and runware_result.get("image_url"):
-                    try:
-                        img_res = await client_http.get(runware_result["image_url"])
-                        if img_res.is_success:
-                            generated.append({"index": i, "base64": base64.b64encode(img_res.content).decode(), "provider": "runware"})
-                            await db.image_gen_batches.update_one(
-                                {"id": batch_id},
-                                {"$push": {"images": generated[-1]}}
-                            )
-                            continue
-                    except Exception as e:
-                        log.warning(f"[{batch_id}] Runware result fetch failed, falling back to FLUX: {e}")
-                else:
-                    log.warning(f"[{batch_id}] Runware generation failed, falling back to FLUX for image {i+1}")
-
-            try:
-                res = await client_http.post(
-                    "https://api.replicate.com/v1/models/black-forest-labs/flux-schnell/predictions",
-                    headers={"Authorization": f"Token {REPLICATE_KEY}",
-                             "Content-Type": "application/json"},
-                    json={
-                        "input": {
-                            "prompt": full_prompt,
-                            "width":  dims["width"],
-                            "height": dims["height"],
-                            "num_outputs": 1,
-                            "num_inference_steps": 4,
-                            "output_format": "png",
-                            "output_quality": 100,
-                            "go_fast": True,
-                        }
-                    })
-
-                if res.status_code != 201:
-                    log.error(f"[{batch_id}] FLUX submit error {res.status_code}: {res.text[:200]}")
-                    await db.image_gen_batches.update_one(
-                        {"id": batch_id},
-                        {"$push": {"errors": {"index": i, "message": f"Replicate returned {res.status_code} — {res.text[:150]}"}}}
-                    )
-                    continue
-
-                prediction_id = res.json()["id"]
-
-                await db.image_gen_batches.update_one(
-                    {"id": batch_id},
-                    {"$set": {"current_step": f"Generating image {i+1} of {total} (FLUX.1)..."}}
-                )
-
-                for poll_attempt in range(60):
-                    await asyncio.sleep(3)
-                    poll = await client_http.get(
-                        f"https://api.replicate.com/v1/predictions/{prediction_id}",
-                        headers={"Authorization": f"Token {REPLICATE_KEY}"})
-                    pdata = poll.json()
-
-                    if pdata["status"] == "succeeded":
-                        output = pdata.get("output")
-                        img_url = output[0] if isinstance(output, list) else output
-                        if img_url:
-                            generated.append({"url": img_url, "prompt": full_prompt, "index": i})
-                        break
-                    elif pdata["status"] == "failed":
-                        log.error(f"[{batch_id}] FLUX prediction failed: {pdata.get('error')}")
+                    img_res = await client_http.get(runware_result["image_url"])
+                    if img_res.is_success:
+                        generated.append({"index": i, "base64": base64.b64encode(img_res.content).decode(), "provider": "runware"})
+                    else:
                         await db.image_gen_batches.update_one(
                             {"id": batch_id},
-                            {"$push": {"errors": {"index": i, "message": f"Generation failed — {pdata.get('error')}"}}}
+                            {"$push": {"errors": {"index": i, "message": "Failed to fetch generated image from Runware"}}}
                         )
-                        break
-
+                else:
+                    await db.image_gen_batches.update_one(
+                        {"id": batch_id},
+                        {"$push": {"errors": {"index": i, "message": "Runware generation failed — no result returned"}}}
+                    )
             except Exception as e:
                 log.error(f"[{batch_id}] Image gen error: {e}")
                 await db.image_gen_batches.update_one(
@@ -581,51 +524,26 @@ async def _process_image_gen(batch_id: str, user_id: str, full_prompt: str,
 async def _retry_single_image(batch_id: str, index: int, full_prompt: str, dims: dict):
     """Regenerates one specific failed image within an existing batch,
     without re-running or re-charging for the whole batch."""
-    async with httpx.AsyncClient(timeout=180) as client_http:
-        try:
-            res = await client_http.post(
-                "https://api.replicate.com/v1/models/black-forest-labs/flux-schnell/predictions",
-                headers={"Authorization": f"Token {REPLICATE_KEY}",
-                         "Content-Type": "application/json"},
-                json={
-                    "input": {
-                        "prompt": full_prompt,
-                        "width":  dims["width"],
-                        "height": dims["height"],
-                        "num_outputs": 1,
-                        "num_inference_steps": 4,
-                        "output_format": "png",
-                        "output_quality": 100,
-                        "go_fast": True,
-                    }
-                })
-            if res.status_code != 201:
+    try:
+        runware_result = await call_runware_image(full_prompt, dims["width"], dims["height"])
+        if not runware_result or not runware_result.get("image_url"):
+            return
+        async with httpx.AsyncClient(timeout=60) as client_http:
+            img_res = await client_http.get(runware_result["image_url"])
+            if not img_res.is_success:
                 return
-            prediction_id = res.json()["id"]
-            for _ in range(60):
-                await asyncio.sleep(3)
-                poll = await client_http.get(
-                    f"https://api.replicate.com/v1/predictions/{prediction_id}",
-                    headers={"Authorization": f"Token {REPLICATE_KEY}"})
-                pdata = poll.json()
-                if pdata["status"] == "succeeded":
-                    output = pdata.get("output")
-                    img_url = output[0] if isinstance(output, list) else output
-                    if img_url:
-                        batch = await db.image_gen_batches.find_one({"id": batch_id})
-                        images = batch.get("images", [])
-                        images.append({"url": img_url, "prompt": full_prompt, "index": index})
-                        # Remove the old error entry for this index
-                        errors = [e for e in batch.get("errors", []) if e.get("index") != index]
-                        await db.image_gen_batches.update_one(
-                            {"id": batch_id},
-                            {"$set": {"images": images, "errors": errors}}
-                        )
-                    break
-                elif pdata["status"] == "failed":
-                    break
-        except Exception as e:
-            log.error(f"[{batch_id}] Retry error for image {index}: {e}")
+            b64 = base64.b64encode(img_res.content).decode()
+        batch = await db.image_gen_batches.find_one({"id": batch_id})
+        images = batch.get("images", [])
+        images.append({"index": index, "base64": b64, "provider": "runware"})
+        # Remove the old error entry for this index
+        errors = [e for e in batch.get("errors", []) if e.get("index") != index]
+        await db.image_gen_batches.update_one(
+            {"id": batch_id},
+            {"$set": {"images": images, "errors": errors}}
+        )
+    except Exception as e:
+        log.error(f"[{batch_id}] Retry error for image {index}: {e}")
 
 
 @api.post("/image-gen")
@@ -636,8 +554,8 @@ async def generate_images(payload: ImageGenIn, background_tasks: BackgroundTasks
     or the new GET /image-gen/{batch_id} for live progress."""
     if not check_tier_limit(user, "ai_gen_credits"):
         raise HTTPException(403, "AI generation credits exhausted for this month")
-    if not REPLICATE_KEY:
-        raise HTTPException(500, "Replicate API key not configured — needed for both upscaling and image generation")
+    if not RUNWARE_API_KEY:
+        raise HTTPException(500, "Runware API key not configured — needed for image generation")
 
     profile = None
     if payload.style_profile_id:
@@ -735,101 +653,82 @@ async def approve_gen_batch(batch_id: str, approved_ids: List[int],
         {"$set": {"status": "approved", "approved_indices": approved_ids}})
     return {"ok": True, "batch_id": batch_id}
 
-# ── True AI Upscaling via Replicate ───────────────────────────────────────────
+# ── True AI Upscaling via Runware ────────────────────────────────────────────
 async def true_upscale(image_base64: str, mime: str, scale: int = 4) -> str:
-    """Real AI upscaling using Real-ESRGAN via Replicate API"""
-    if not REPLICATE_KEY:
-        log.warning("No Replicate key — returning original")
+    """Real AI upscaling via Runware (replaced Real-ESRGAN/Replicate)."""
+    if not RUNWARE_API_KEY:
+        log.warning("No Runware key — returning original")
         return image_base64
 
+    task = {
+        "taskType": "upscale",
+        "taskUUID": str(uuid.uuid4()),
+        "model": RUNWARE_UPSCALE_MODEL,
+        "upscaleFactor": scale,
+        "outputType": "URL",
+        "inputs": {"image": f"data:{mime};base64,{image_base64}"},
+    }
     async with httpx.AsyncClient(timeout=120) as client_http:
-        # Submit prediction
         res = await client_http.post(
-            "https://api.replicate.com/v1/predictions",
-            headers={"Authorization": f"Token {REPLICATE_KEY}",
-                     "Content-Type": "application/json"},
-            json={"version": "42fed1c4974146d4d2414e2be2c5277c7fcf05fcc3a73abf41610695738c1d7b",
-                  "input": {"image": f"data:{mime};base64,{image_base64}",
-                             "scale": scale,
-                             "face_enhance": False}})
+            "https://api.runware.ai/v1",
+            headers={"Authorization": f"Bearer {RUNWARE_API_KEY}", "Content-Type": "application/json"},
+            json=[task])
 
-        if res.status_code != 201:
-            log.error(f"Replicate submit failed: {res.text}")
+        if res.status_code != 200:
+            log.error(f"Runware upscale failed: {res.text[:300]}")
             return image_base64
 
-        prediction = res.json()
-        prediction_id = prediction["id"]
+        data = res.json()
+        results = data.get("data", data) if isinstance(data, dict) else data
+        image_url = results[0].get("imageURL") if isinstance(results, list) and results else None
+        if not image_url:
+            log.error(f"Runware upscale — no imageURL in response: {data}")
+            return image_base64
 
-        # Poll for result
-        for _ in range(60):
-            await asyncio.sleep(5)
-            poll = await client_http.get(
-                f"https://api.replicate.com/v1/predictions/{prediction_id}",
-                headers={"Authorization": f"Token {REPLICATE_KEY}"})
-            data = poll.json()
-            if data["status"] == "succeeded":
-                output_url = data["output"]
-                # Download result and convert to base64
-                img_res = await client_http.get(output_url)
-                return base64.b64encode(img_res.content).decode()
-            elif data["status"] == "failed":
-                log.error(f"Replicate prediction failed: {data.get('error')}")
-                return image_base64
-
-    return image_base64
+        img_res = await client_http.get(image_url)
+        if not img_res.is_success:
+            return image_base64
+        return base64.b64encode(img_res.content).decode()
 
 # ── Background Removal via Replicate ─────────────────────────────────────────
 async def remove_background(image_base64: str, mime: str) -> str:
-    """AI background removal using 851-labs/background-remover via Replicate.
-    Same model as Image Optimiser, for visual consistency across ADG tools.
+    """AI background removal via Runware (replaced 851-labs/Replicate).
     Mirrors true_upscale()'s style: logs and returns the original image on
     any failure rather than raising, so one failed background-removal step
     doesn't take down the whole pipeline run for that image."""
-    if not REPLICATE_KEY:
-        log.warning("No Replicate key — skipping background removal, returning original")
+    if not RUNWARE_API_KEY:
+        log.warning("No Runware key — skipping background removal, returning original")
         return image_base64
 
-    async with httpx.AsyncClient(timeout=120) as client_http:
-        upload_res = await client_http.post(
-            "https://api.replicate.com/v1/files",
-            headers={"Authorization": f"Token {REPLICATE_KEY}"},
-            files={"content": ("upload." + mime.split("/")[-1], base64.b64decode(image_base64), mime)},
-        )
-        if upload_res.status_code not in (200, 201):
-            log.error(f"Replicate file upload error: {upload_res.status_code} {upload_res.text}")
-            return image_base64
-
-        image_url = upload_res.json().get("urls", {}).get("get") or upload_res.json().get("serving_url")
-        if not image_url:
-            log.error(f"Replicate file upload — no URL in response: {upload_res.text}")
-            return image_base64
-
+    task = {
+        "taskType": "removeBackground",
+        "taskUUID": str(uuid.uuid4()),
+        "model": RUNWARE_BGREMOVE_MODEL,
+        "outputType": "URL",
+        "outputFormat": "PNG",  # required for transparency — JPG doesn't support it
+        "inputImage": f"data:{mime};base64,{image_base64}",
+    }
+    async with httpx.AsyncClient(timeout=90) as client_http:
         res = await client_http.post(
-            "https://api.replicate.com/v1/models/851-labs/background-remover/predictions",
-            headers={"Authorization": f"Token {REPLICATE_KEY}", "Content-Type": "application/json"},
-            json={"input": {"image": image_url}},
+            "https://api.runware.ai/v1",
+            headers={"Authorization": f"Bearer {RUNWARE_API_KEY}", "Content-Type": "application/json"},
+            json=[task],
         )
-        if res.status_code != 201:
-            log.error(f"Replicate bg-remove submit error: {res.text}")
+        if res.status_code != 200:
+            log.error(f"Runware bg-removal error: {res.text[:300]}")
             return image_base64
 
-        prediction_id = res.json()["id"]
-        for _ in range(24):
-            await asyncio.sleep(3)
-            poll = await client_http.get(
-                f"https://api.replicate.com/v1/predictions/{prediction_id}",
-                headers={"Authorization": f"Token {REPLICATE_KEY}"},
-            )
-            data = poll.json()
-            status = data.get("status")
-            if status == "succeeded":
-                img_res = await client_http.get(data["output"])
-                return base64.b64encode(img_res.content).decode()
-            elif status == "failed":
-                log.error(f"Replicate bg-remove prediction failed: {data.get('error')}")
-                return image_base64
+        data = res.json()
+        results = data.get("data", data) if isinstance(data, dict) else data
+        image_url = results[0].get("imageURL") if isinstance(results, list) and results else None
+        if not image_url:
+            log.error(f"Runware bg-removal — no imageURL in response: {data}")
+            return image_base64
 
-    log.error("Background removal timed out — returning original")
+        img_res = await client_http.get(image_url)
+        if not img_res.is_success:
+            return image_base64
+        return base64.b64encode(img_res.content).decode()
     return image_base64
 
 # ── Pipeline ──────────────────────────────────────────────────────────────────
@@ -1656,16 +1555,17 @@ async def health_detailed():
     except Exception as e:
         checks["mongodb"] = {"status": "error", "detail": str(e)}
     
-    # Replicate check
+    # Runware check
     try:
         async with httpx.AsyncClient(timeout=10) as c:
-            r = await c.get(
-                "https://api.replicate.com/v1/account",
-                headers={"Authorization": f"Token {REPLICATE_KEY}"}
+            r = await c.post(
+                "https://api.runware.ai/v1",
+                headers={"Authorization": f"Bearer {RUNWARE_API_KEY}", "Content-Type": "application/json"},
+                json=[{"taskType": "ping", "ping": True}],
             )
-            checks["replicate"] = {"status": "ok" if r.status_code == 200 else "error"}
+            checks["runware"] = {"status": "ok" if r.status_code == 200 else "error"}
     except Exception as e:
-        checks["replicate"] = {"status": "error", "detail": str(e)}
+        checks["runware"] = {"status": "error", "detail": str(e)}
 
     # Gemini/Google AI check
     checks["gemini"] = {"status": "ok" if os.environ.get("GOOGLE_AI_KEY") else "not_configured"}
@@ -1760,7 +1660,7 @@ async def health():
         overall_ok = False
 
     checks["r2_configured"] = bool(R2_ENDPOINT and R2_ACCESS_KEY and R2_SECRET_KEY)
-    checks["replicate_configured"] = bool(REPLICATE_KEY)
+    checks["runware_configured"] = bool(RUNWARE_API_KEY)
     checks["anthropic_configured"] = bool(ANTHROPIC_KEY)
     checks["stripe_configured"] = bool(STRIPE_KEY)
     if _startup_warnings:
