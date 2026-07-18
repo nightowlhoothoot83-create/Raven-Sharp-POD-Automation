@@ -666,6 +666,7 @@ async def true_upscale(image_base64: str, mime: str, scale: int = 4) -> str:
         "model": RUNWARE_UPSCALE_MODEL,
         "upscaleFactor": scale,
         "outputType": "URL",
+        "outputFormat": "PNG",  # preserve transparency if input came from bg removal
         "inputs": {"image": f"data:{mime};base64,{image_base64}"},
     }
     async with httpx.AsyncClient(timeout=120) as client_http:
