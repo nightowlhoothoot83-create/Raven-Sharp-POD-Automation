@@ -4,7 +4,7 @@ import { useAuth } from "../context/AuthContext";
 import api from "../lib/api";
 import { PLATFORMS, getProductsForPlatform } from "../data/productCatalogue";
 import ADGFooter from "../components/ADGFooter";
-import { Upload, X, Play, ChevronRight, Globe, Zap, AlertCircle, CheckCircle2, Info, Clock, Lock } from "lucide-react";
+import { Upload, X, Play, ChevronRight, Globe, Zap, AlertCircle, CheckCircle2, Info, Clock, Lock, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 
 const MARKETS = [
