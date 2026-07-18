@@ -654,8 +654,10 @@ async def approve_gen_batch(batch_id: str, approved_ids: List[int],
     return {"ok": True, "batch_id": batch_id}
 
 # ── True AI Upscaling via Runware ────────────────────────────────────────────
-async def true_upscale(image_base64: str, mime: str, scale: int = 4) -> str:
-    """Real AI upscaling via Runware (replaced Real-ESRGAN/Replicate)."""
+async def true_upscale(image_base64: str, mime: str, scale: int = 2) -> str:
+    """Real AI upscaling via Runware (replaced Real-ESRGAN/Replicate).
+    Note: runware:502@1 (Stable Diffusion Latent Upscaler) only supports
+    upscaleFactor=2 — Runware rejects 3 or 4 outright with invalidValue."""
     if not RUNWARE_API_KEY:
         log.warning("No Runware key — returning original")
         return image_base64
@@ -990,7 +992,7 @@ async def _process_one_pipeline_image(run_id, idx, total, img_data, platform, ma
         else:
             await set_step("upscaling")
             log.info(f"[{run_id}] Upscaling {name}...")
-            upscaled_b64 = await true_upscale(image_b64, mime, scale=4)
+            upscaled_b64 = await true_upscale(image_b64, mime, scale=2)
             upscaled_b64 = apply_dpi_and_bleed(upscaled_b64, dpi=img_data.get("dpi", 300), add_bleed=img_data.get("addBleed", False))
 
         # Rename BEFORE product choice/listing — the SEO filename step needs
