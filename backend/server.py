@@ -64,7 +64,7 @@ for _w in _startup_warnings:
 ANTHROPIC_KEY     = os.environ.get("ANTHROPIC_API_KEY", "")
 RUNWARE_API_KEY   = os.environ.get("RUNWARE_API_KEY", "")
 RUNWARE_MODEL     = os.environ.get("RUNWARE_MODEL", "runware:101@1")  # image generation — verify/pick exact model in your Runware dashboard's model browser
-RUNWARE_UPSCALE_MODEL = os.environ.get("RUNWARE_UPSCALE_MODEL", "runware:502@1")  # verify against your dashboard
+RUNWARE_UPSCALE_MODEL = os.environ.get("RUNWARE_UPSCALE_MODEL", "runware:504@1")  # Real-ESRGAN — matches the UI label, supports true 4x
 RUNWARE_BGREMOVE_MODEL = os.environ.get("RUNWARE_BGREMOVE_MODEL", "runware:110@1")  # verify against your dashboard
 R2_ENDPOINT       = os.environ.get("R2_ENDPOINT", "")  # https://<account_id>.r2.cloudflarestorage.com
 R2_ACCESS_KEY     = os.environ.get("R2_ACCESS_KEY", "")
@@ -654,10 +654,10 @@ async def approve_gen_batch(batch_id: str, approved_ids: List[int],
     return {"ok": True, "batch_id": batch_id}
 
 # ── True AI Upscaling via Runware ────────────────────────────────────────────
-async def true_upscale(image_base64: str, mime: str, scale: int = 2) -> str:
+async def true_upscale(image_base64: str, mime: str, scale: int = 4) -> str:
     """Real AI upscaling via Runware (replaced Real-ESRGAN/Replicate).
-    Note: runware:502@1 (Stable Diffusion Latent Upscaler) only supports
-    upscaleFactor=2 — Runware rejects 3 or 4 outright with invalidValue."""
+    Real-ESRGAN (runware:504@1) genuinely supports 4x upscaling — unlike
+    the Stable Diffusion Latent Upscaler default, which only supports 2x."""
     if not RUNWARE_API_KEY:
         log.warning("No Runware key — returning original")
         return image_base64
@@ -992,7 +992,7 @@ async def _process_one_pipeline_image(run_id, idx, total, img_data, platform, ma
         else:
             await set_step("upscaling")
             log.info(f"[{run_id}] Upscaling {name}...")
-            upscaled_b64 = await true_upscale(image_b64, mime, scale=2)
+            upscaled_b64 = await true_upscale(image_b64, mime, scale=4)
             upscaled_b64 = apply_dpi_and_bleed(upscaled_b64, dpi=img_data.get("dpi", 300), add_bleed=img_data.get("addBleed", False))
 
         # Rename BEFORE product choice/listing — the SEO filename step needs
