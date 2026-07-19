@@ -348,8 +348,8 @@ export default function ReviewQueue() {
         approve_all: false,
         platform: selectedPlatform,
       });
-      toast.success(`${data.pushed} listing${data.pushed !== 1 ? "s" : ""} sent to ${destination.name}`);
-      if (data.failed > 0) toast.error(`${data.failed} failed — check the destination connection`);
+      const productDrafts = (data.results || []).reduce((sum, item) => sum + (item.drafts_ready || 0), 0);\n      toast.success(`${productDrafts || data.pushed} mockup-ready draft${(productDrafts || data.pushed) !== 1 ? "s" : ""} created in ${destination.name}`);
+      if (data.failed > 0) toast.error(`${data.failed} artwork batch${data.failed !== 1 ? "es" : ""} produced no mockup-ready drafts`);
       if (data.pushed > 0) setTimeout(() => navigate("/dashboard"), 1500);
     } catch (err) {
       const _eid = err.response?.data?.error_id;
@@ -426,7 +426,7 @@ export default function ReviewQueue() {
           <div className="border-t border-white/10 pt-5">
             <h2 className="font-display text-lg font-bold">2. Choose the destination</h2>
             <p className="text-xs text-[var(--muted)] mt-1 mb-4">
-              API destinations create drafts through your connection. CSV destinations download an upload-ready package.
+              API destinations create unpublished product drafts and request at least one authentic provider mockup per product. CSV destinations download an upload-ready package.
             </p>
             <div className="grid sm:grid-cols-2 gap-3">
               <select
@@ -446,7 +446,7 @@ export default function ReviewQueue() {
               >
                 <Send className="w-4 h-4" />
                 {pushing ? "Working..." : destination?.api
-                  ? `Create ${approved} ${destination.name} Draft${approved !== 1 ? "s" : ""}`
+                  ? `Create Drafts + Mockups in ${destination.name}`
                   : destination ? `Download ${destination.name} Package` : "Choose a destination"}
               </button>
             </div>
