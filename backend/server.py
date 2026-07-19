@@ -187,7 +187,9 @@ class StyleProfileIn(BaseModel):
     reference_image_url: Optional[str] = None  # if set, generation uses Runware (real character-consistency support) instead of FLUX Schnell (which has none)
 
 class PipelineRunIn(BaseModel):
-    platform: str
+    # Optional for backwards compatibility. New runs are platform-neutral;
+    # the destination is selected after review/export.
+    platform: Optional[str] = None
     images: List[Dict[str, Any]]  # [{name, base64, mime}]
     style_profile_id: Optional[str] = None
     market: Optional[str] = "global"
@@ -222,6 +224,7 @@ class ListingApprovalIn(BaseModel):
     run_id: str
     listings: List[Dict[str, Any]]  # approved/edited listings
     approve_all: bool = False
+    platform: Optional[str] = None  # chosen at the final publish/export stage
 
 class StripeCheckoutIn(BaseModel):
     tier: str
@@ -808,14 +811,20 @@ def _format_artwork_type_guide() -> str:
     return "\n".join(lines)
 
 
-async def analyse_with_claude(image_base64: str, mime: str, platform: str,
+async def analyse_with_claude(image_base64: str, mime: str, platform: Optional[str],
                                market: str, price_tier: str) -> dict:
     """Claude Vision — analyse image, pick products, write listing copy"""
     if not ANTHROPIC_KEY:
         raise HTTPException(500, "No Anthropic API key configured")
 
-    platform_info = PLATFORMS.get(platform, {})
-    platform_name = platform_info.get("name", platform)
+    platform_info = PLATFORMS.get(platform, {}) if platform else {}
+    platform_name = platform_info.get("name", platform) if platform else "platform-neutral POD marketplaces"
+    title_guidance = (f"optimised title for {platform_name} (max 140 chars)"
+                      if platform else
+                      "platform-neutral SEO title suitable for later adaptation (max 140 chars)")
+    tag_guidance = ("Tags: max 13 for Etsy, max 15 for Redbubble, unlimited for others."
+                    if platform else
+                    "Tags: return the 13 strongest reusable search tags; platform-specific limits are applied at export.")
 
     prompt = f"""You are an expert POD (print-on-demand) product strategist and copywriter.
 
@@ -852,7 +861,7 @@ Return this exact JSON structure:
       "profit_margin": 0.00
     }}
   ],
-  "seo_title": "optimised title for {platform_name} (max 140 chars)",
+  "seo_title": "{title_guidance}",
   "description": "full listing description 150-300 words, engaging, keyword-rich",
   "tags": ["tag1", "tag2"],
   "primary_colour": "dominant colour",
@@ -860,9 +869,10 @@ Return this exact JSON structure:
   "target_audience": "who would buy this"
 }}
 
-Recommend 4-8 products that genuinely suit this artwork for {platform_name}.
+Recommend 4-8 products that genuinely suit this artwork across major POD marketplaces.
+Do not assume or require a fulfilment provider; the user chooses that after reviewing the results.
 Price in AUD for {market} market at {price_tier} pricing.
-Tags: max 13 for Etsy, max 15 for Redbubble, unlimited for others."""
+{tag_guidance}"""
 
     async with httpx.AsyncClient(timeout=60) as client_http:
         res = await client_http.post(
@@ -1169,7 +1179,7 @@ async def retry_pipeline_image(run_id: str, image_id: str, payload: PipelineRetr
         checkpoint["id"] = image_id
         new_item = await _process_one_pipeline_image(
             run_id, idx, total, img_payload,
-            run["platform"], "global", "mid",
+            run.get("platform"), "global", "mid",
             checkpoint=checkpoint,
         )
         results = run["results"]
@@ -1218,7 +1228,9 @@ async def approve_listings(run_id: str, payload: ListingApprovalIn,
     if not run: raise HTTPException(404, "Run not found")
 
     approved_listings = payload.listings
-    platform = run["platform"]
+    platform = payload.platform or run.get("platform")
+    if not platform:
+        raise HTTPException(400, "Choose a destination platform before publishing")
 
     push_results = []
     for listing in approved_listings:
@@ -1235,7 +1247,13 @@ async def approve_listings(run_id: str, payload: ListingApprovalIn,
     await db.pipeline_runs.update_one(
         {"id": run_id},
         {"$set": {"status": "completed", "approved_count": success,
-                  "completed_at": datetime.now(timezone.utc)}})
+                  "last_export_platform": platform,
+                  "completed_at": datetime.now(timezone.utc)},
+         "$push": {"export_history": {
+             "platform": platform, "successful": success,
+             "failed": len(push_results) - success,
+             "created_at": datetime.now(timezone.utc)
+         }}})
 
     return {"run_id": run_id, "pushed": success,
             "failed": len(push_results) - success, "results": push_results}
