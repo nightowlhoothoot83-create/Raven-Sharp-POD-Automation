@@ -3,7 +3,7 @@ import { useNavigate, useParams, Link } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import api from "../lib/api";
 import ADGFooter from "../components/ADGFooter";
-import { Upload, X, Play, ChevronRight, Globe, Zap, AlertCircle, Info, Clock, RefreshCw } from "lucide-react";
+import { Upload, X, Play, ChevronRight, Globe, Zap, AlertCircle, Info, Clock, RefreshCw, CheckCircle2 } from "lucide-react";
 import { toast } from "sonner";
 
 const MARKETS = [
