@@ -4,10 +4,10 @@ import ADGFooter from "../components/ADGFooter";
 import { ArrowRight, Check, Sparkles, Image as ImageIcon, ListChecks, Calendar, Shield, Star } from "lucide-react";
 
 const FEATURES = [
-  { icon:<Sparkles className="w-5 h-5"/>,    title:"Claude Vision Product Match",  desc:"Drop in artwork and Claude analyses it visually, recommending the best-fit products from 60 options across 9 platforms — with real pricing, margins and SEO copy generated automatically." },
+  { icon:<Sparkles className="w-5 h-5"/>,    title:"Claude Vision Product Match",  desc:"Drop in artwork and Claude analyses it once, recommending best-fit products and reusable SEO copy before you choose any provider." },
   { icon:<ImageIcon className="w-5 h-5"/>,   title:"Real AI Image Generation",     desc:"Need fresh artwork instead of uploading your own? Generate it directly in the pipeline — no separate tool required." },
-  { icon:<ListChecks className="w-5 h-5"/>,  title:"Review & Approve Queue",       desc:"Every AI-generated listing lands in a review queue before it goes anywhere. Edit titles, tags and pricing inline, then approve in bulk." },
-  { icon:<Shield className="w-5 h-5"/>,      title:"Real Per-Platform Output",     desc:"Etsy gets a real draft pushed via API. Redbubble, TeePublic and Merch by Amazon get platform-correct CSVs and ready-to-run upload packages — not one generic export." },
+  { icon:<ListChecks className="w-5 h-5"/>,  title:"Review & Approve Queue",       desc:"Every listing lands in a review queue before it goes anywhere. Edit and approve first, then choose the final provider or marketplace." },
+  { icon:<Shield className="w-5 h-5"/>,      title:"Real Per-Platform Output",     desc:"Choose the destination after review: connected providers receive drafts, while Redbubble, TeePublic and Merch by Amazon get platform-correct CSV packages." },
   { icon:<Calendar className="w-5 h-5"/>,    title:"Scheduling",                   desc:"Queue pipeline runs to fire automatically on a schedule. Set it up once, let it keep producing listings while you focus on the art." },
   { icon:<Check className="w-5 h-5"/>,       title:"Multi-Workspace",              desc:"Run multiple brands or stores from one account. Each workspace keeps its own style profiles, platform connections and history." },
 ];
@@ -46,7 +46,7 @@ export default function Landing() {
             </span>
           </h1>
           <p className="text-lg sm:text-xl text-[var(--muted)] max-w-2xl mx-auto mb-10 leading-relaxed">
-            Drop in artwork. Claude Vision matches it to 60 products across 9 platforms, writes the SEO copy, and ships platform-ready listings — direct API push for Etsy, ready-to-upload packages for the rest.
+            Drop in artwork once. Review the product matches and SEO copy, then choose a connected provider for drafts or download the correct marketplace package.
           </p>
           <div className="flex flex-wrap gap-4 justify-center">
             <Link to="/register"
