@@ -1615,7 +1615,7 @@ async def health_stats(user: dict = Depends(get_user)):
         "timestamp": datetime.now(timezone.utc).isoformat()
     }
 
-@api.get("/")
+@app.get("/")
 async def root():
     return {"service": "raven-sharp-pod", "status": "ok",
             "version": "2.0", "part_of": "Ascension Digital Group"}
