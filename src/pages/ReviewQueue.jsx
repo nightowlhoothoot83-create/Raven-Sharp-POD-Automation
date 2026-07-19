@@ -348,7 +348,8 @@ export default function ReviewQueue() {
         approve_all: false,
         platform: selectedPlatform,
       });
-      const productDrafts = (data.results || []).reduce((sum, item) => sum + (item.drafts_ready || 0), 0);\n      toast.success(`${productDrafts || data.pushed} mockup-ready draft${(productDrafts || data.pushed) !== 1 ? "s" : ""} created in ${destination.name}`);
+      const productDrafts = (data.results || []).reduce((sum, item) => sum + (item.drafts_ready || 0), 0);
+      toast.success(`${productDrafts || data.pushed} mockup-ready draft${(productDrafts || data.pushed) !== 1 ? "s" : ""} created in ${destination.name}`);
       if (data.failed > 0) toast.error(`${data.failed} artwork batch${data.failed !== 1 ? "es" : ""} produced no mockup-ready drafts`);
       if (data.pushed > 0) setTimeout(() => navigate("/dashboard"), 1500);
     } catch (err) {
