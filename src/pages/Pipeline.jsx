@@ -2,9 +2,8 @@ import React, { useState, useRef, useCallback, useEffect } from "react";
 import { useNavigate, useParams, Link } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import api from "../lib/api";
-import { PLATFORMS, getProductsForPlatform } from "../data/productCatalogue";
 import ADGFooter from "../components/ADGFooter";
-import { Upload, X, Play, ChevronRight, Globe, Zap, AlertCircle, CheckCircle2, Info, Clock, Lock, RefreshCw } from "lucide-react";
+import { Upload, X, Play, ChevronRight, Globe, Zap, AlertCircle, Info, Clock, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 
 const MARKETS = [
@@ -55,8 +54,7 @@ export default function Pipeline() {
   const fileRef = useRef(null);
   const pollTimerRef = useRef(null);
 
-  const [step, setStep] = useState(1); // 1=platform, 2=upload, 3=settings, 4=running
-  const [selectedPlatform, setSelectedPlatform] = useState(null);
+  const [step, setStep] = useState(1); // 1=artwork, 2=settings, 3=running
   const [images, setImages] = useState([]);
   const [market, setMarket] = useState("global");
   const [priceTier, setPriceTier] = useState("mid");
@@ -68,8 +66,6 @@ export default function Pipeline() {
   const [lastPreview, setLastPreview] = useState(null);
   const [awaitingContinue, setAwaitingContinue] = useState(false);
   const [resuming, setResuming] = useState(!!resumeRunId);
-  const [connectedPlatforms, setConnectedPlatforms] = useState([]);
-  const [platformsLoading, setPlatformsLoading] = useState(true);
 
   const tier = user?.tier || "free";
   const tierLimits = { free: 3, creator: 10, pro: 25, agency: 40, owner: 999 };
@@ -86,7 +82,7 @@ export default function Pipeline() {
       const loaded = JSON.parse(pending);
       if (Array.isArray(loaded) && loaded.length > 0) {
         setImages(loaded.slice(0, maxImages));
-        setStep(2);
+        setStep(1);
         toast.success("Generated image loaded");
       }
     } catch (err) {
@@ -95,14 +91,6 @@ export default function Pipeline() {
       localStorage.removeItem("pendingPipelineImages");
     }
   }, [maxImages]);
-
-  // ── Fetch connected platforms on mount ────────────────────────────────────
-  useEffect(() => {
-    api.get("/account/platforms")
-      .then(({ data }) => setConnectedPlatforms(data.connected || []))
-      .catch(() => {})
-      .finally(() => setPlatformsLoading(false));
-  }, []);
 
   // ── Resume an existing in_progress run (save point) ──────────────────────
   useEffect(() => {
@@ -113,7 +101,7 @@ export default function Pipeline() {
         setRunId(data.id);
         setTotal(data.total_count);
         setCompleted(data.results || []);
-        setStep(4);
+        setStep(3);
         setRunning(true);
         setResuming(false);
         // Pass the freshly-fetched values directly rather than relying on
@@ -247,7 +235,7 @@ export default function Pipeline() {
         });
       }));
       setCompleted(prev => prev.filter(r => r.status !== "failed" && !r.error));
-      setStep(4);
+      setStep(3);
       pollRun(runId, total, completed.length - failedItems.length);
     } catch (err) {
       const _eid = err.response?.data?.error_id;
@@ -258,14 +246,13 @@ export default function Pipeline() {
 
   // ── Kick off a brand new run ───────────────────────────────────────────────
   const runPipeline = async () => {
-    if (!selectedPlatform || images.length === 0) return;
+    if (images.length === 0) return;
     setRunning(true);
-    setStep(4);
+    setStep(3);
 
     try {
       setProgress({ step: "Creating pipeline run...", pct: 2 });
       const payload = {
-        platform: selectedPlatform,
         market,
         price_tier: priceTier,
         images: images.map(img => ({
@@ -290,13 +277,9 @@ export default function Pipeline() {
       const _eid = err.response?.data?.error_id;
       toast.error((err.response?.data?.detail || err.response?.data?.error || err.message) + (_eid ? ` (error ${_eid})` : ""));
       setRunning(false);
-      setStep(3);
+      setStep(2);
     }
   };
-
-  const platformProducts = selectedPlatform ? getProductsForPlatform(selectedPlatform) : [];
-  const isConnected = (id) => connectedPlatforms.includes(id);
-  const needsSetup = (id) => PLATFORMS[id]?.api && !isConnected(id);
 
   return (
     <div className="min-h-screen pt-20 pb-16">
@@ -309,13 +292,13 @@ export default function Pipeline() {
             New Pipeline Run
           </h1>
           <p className="text-[var(--muted)] mt-2">
-            Select a platform, upload your artwork, configure your settings — Raven Sharp handles the rest.
+            Upload your artwork and configure the run. Choose where it goes only after reviewing the results.
           </p>
         </div>
 
         {/* Step indicators */}
         <div className="flex items-center gap-2 mb-10">
-          {[{n:1,label:"Platform"},{n:2,label:"Artwork"},{n:3,label:"Settings"},{n:4,label:"Running"}].map((s, i) => (
+          {[{n:1,label:"Artwork"},{n:2,label:"Settings"},{n:3,label:"Running"}].map((s, i) => (
             <React.Fragment key={s.n}>
               <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-mono uppercase tracking-wider transition-all ${
                 step === s.n ? "bg-[var(--raven)]/20 text-[var(--raven-glow)] border border-[var(--raven)]/30"
@@ -328,117 +311,19 @@ export default function Pipeline() {
                 }`}>{s.n}</span>
                 {s.label}
               </div>
-              {i < 3 && <ChevronRight className="w-3.5 h-3.5 text-[var(--subtle)]" />}
+              {i < 2 && <ChevronRight className="w-3.5 h-3.5 text-[var(--subtle)]" />}
             </React.Fragment>
           ))}
         </div>
 
-        {/* ── Step 1 — Platform selection ─────────────────────────────────────── */}
+        {/* ── Step 1 — Upload artwork ─────────────────────────────────────────── */}
         {step === 1 && (
-          <div className="fade-up">
-            <h2 className="font-display text-2xl font-bold mb-1">Choose your platform</h2>
-            <p className="text-sm text-[var(--muted)] mb-4">
-              Select one platform per run. Products, copy format and output method are all optimised for your choice.
-            </p>
-
-            {/* Legend */}
-            <div className="flex flex-wrap gap-3 mb-6 text-xs">
-              <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">
-                <CheckCircle2 className="w-3.5 h-3.5" />
-                API / OAuth — publishes directly to your store
-              </div>
-              <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-400">
-                <Info className="w-3.5 h-3.5" />
-                CSV — downloads a file you upload yourself
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-              {Object.entries(PLATFORMS).map(([id, plat]) => {
-                const connected = isConnected(id);
-                const setupNeeded = needsSetup(id);
-                const note = PLATFORM_NOTES[id];
-                return (
-                  <button
-                    key={id}
-                    onClick={() => { setSelectedPlatform(id); setStep(2); }}
-                    className="glass rounded-2xl p-5 text-left hover:border-[var(--raven)]/40 transition-all group"
-                  >
-                    <div className="flex items-start justify-between gap-2 mb-2">
-                      <span className="font-display text-base font-bold leading-tight">{plat.name}</span>
-                      <span className={`shrink-0 text-[10px] font-mono uppercase tracking-widest px-2 py-0.5 rounded border mt-0.5 ${
-                        plat.api
-                          ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-400"
-                          : "border-amber-500/30 bg-amber-500/10 text-amber-400"
-                      }`}>
-                        {note?.type || plat.badge}
-                      </span>
-                    </div>
-
-                    {note?.desc && (
-                      <p className="text-xs text-[var(--muted)] mb-3 leading-relaxed">{note.desc}</p>
-                    )}
-
-                    {!platformsLoading && (
-                      <div className={`flex items-center gap-1.5 text-[11px] font-medium mb-2 ${
-                        connected ? "text-emerald-400"
-                          : plat.api ? "text-amber-400"
-                          : "text-[var(--subtle)]"
-                      }`}>
-                        {connected ? (
-                          <><CheckCircle2 className="w-3.5 h-3.5" /> Connected</>
-                        ) : plat.api ? (
-                          <><AlertCircle className="w-3.5 h-3.5" /> Needs setup</>
-                        ) : (
-                          <><Info className="w-3.5 h-3.5" /> No connection needed</>
-                        )}
-                      </div>
-                    )}
-
-                    <p className="text-[11px] text-[var(--subtle)]">
-                      {getProductsForPlatform(id).length} products available
-                    </p>
-
-                    {setupNeeded && !platformsLoading && (
-                      <p className="text-[10px] text-amber-400/70 mt-2">
-                        Add your API key in <span className="underline">Account → Platforms</span> to publish directly
-                      </p>
-                    )}
-
-                    <div className="mt-3 flex items-center gap-1 text-xs text-[var(--raven-glow)] opacity-0 group-hover:opacity-100 transition-opacity">
-                      Select <ChevronRight className="w-3.5 h-3.5" />
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-
-            {!platformsLoading && connectedPlatforms.length === 0 && (
-              <div className="mt-6 flex items-start gap-3 px-4 py-3 rounded-xl bg-amber-500/10 border border-amber-500/20 text-sm text-amber-300">
-                <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-                <div>
-                  <span className="font-semibold">No platforms connected yet.</span> CSV platforms (Redbubble, TeePublic, Merch by Amazon) work without any connection. API platforms need a key.{" "}
-                  <Link to="/account" className="underline text-amber-200 hover:text-white transition-colors">
-                    Connect platforms →
-                  </Link>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* ── Step 2 — Upload artwork ─────────────────────────────────────────── */}
-        {step === 2 && (
           <div className="fade-up">
             <div className="flex items-center justify-between mb-2">
               <h2 className="font-display text-2xl font-bold">Upload artwork</h2>
-              <button onClick={() => setStep(1)} className="text-xs text-[var(--muted)] hover:text-[var(--text)] transition-colors flex items-center gap-1">
-                ← Change platform
-              </button>
             </div>
             <p className="text-sm text-[var(--muted)] mb-5">
-              Platform: <span className="text-[var(--raven-glow)] font-semibold">{PLATFORMS[selectedPlatform]?.name}</span>
-              {" · "}{platformProducts.length} products will be matched
+              Your artwork is processed once into reusable listings. You will choose the destination after review.
             </p>
 
             {/* What the pipeline does */}
@@ -452,7 +337,7 @@ export default function Pipeline() {
                   { n: "1", label: "AI Upscale", desc: "Real-ESRGAN upscales to print-quality resolution" },
                   { n: "2", label: "DPI Inject", desc: "Sets 300 DPI metadata for clean print output" },
                   { n: "3", label: "Vision Analysis", desc: "Claude reads your art: colours, style, themes" },
-                  { n: "4", label: "SEO Copy", desc: "Titles, descriptions & tags written per platform" },
+                  { n: "4", label: "SEO Copy", desc: "Reusable titles, descriptions & tags ready for final export" },
                 ].map(s => (
                   <div key={s.n} className="flex gap-2">
                     <span className="w-5 h-5 rounded-full bg-[var(--raven)]/20 text-[var(--raven-glow)] text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">{s.n}</span>
@@ -575,7 +460,7 @@ export default function Pipeline() {
                   {images.length} / {maxImages} image{maxImages !== 1 ? "s" : ""} loaded
                 </span>
                 <button
-                  onClick={() => setStep(3)}
+                  onClick={() => setStep(2)}
                   className="flex items-center gap-2 px-6 py-2.5 bg-[var(--raven)] hover:bg-[var(--raven-glow)] text-white rounded-xl text-sm font-semibold transition-all"
                 >
                   Continue to settings <ChevronRight className="w-4 h-4" />
@@ -585,15 +470,15 @@ export default function Pipeline() {
           </div>
         )}
 
-        {/* ── Step 3 — Settings ───────────────────────────────────────────────── */}
-        {step === 3 && (
+        {/* ── Step 2 — Settings ───────────────────────────────────────────────── */}
+        {step === 2 && (
           <div className="fade-up">
             <div className="flex items-center justify-between mb-2">
               <h2 className="font-display text-2xl font-bold">Run settings</h2>
-              <button onClick={() => setStep(2)} className="text-xs text-[var(--muted)] hover:text-[var(--text)] transition-colors">← Back</button>
+              <button onClick={() => setStep(1)} className="text-xs text-[var(--muted)] hover:text-[var(--text)] transition-colors">← Back</button>
             </div>
             <p className="text-sm text-[var(--muted)] mb-7">
-              These settings shape the AI-generated copy. You can still edit everything in the review queue before anything goes live.
+              These settings shape platform-neutral AI copy. Edit the results, then choose a destination before anything is exported or sent.
             </p>
 
             <div className="grid sm:grid-cols-2 gap-6 mb-6">
@@ -653,7 +538,7 @@ export default function Pipeline() {
               <h3 className="font-display text-base font-bold mb-4">Run Summary</h3>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm mb-4">
                 {[
-                  { label: "Platform",   value: PLATFORMS[selectedPlatform]?.name },
+                  { label: "Destination", value: "Choose after review" },
                   { label: "Images",     value: `${images.length}` },
                   { label: "Market",     value: MARKETS.find(m => m.value === market)?.label },
                   { label: "Price tier", value: PRICE_TIERS.find(t => t.value === priceTier)?.label },
@@ -693,8 +578,8 @@ export default function Pipeline() {
           </div>
         )}
 
-        {/* ── Step 4 — Running ────────────────────────────────────────────────── */}
-        {step === 4 && (
+        {/* ── Step 3 — Running ────────────────────────────────────────────────── */}
+        {step === 3 && (
           <div className="fade-up">
             {!awaitingContinue && !resuming && (
               <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-300 text-sm font-medium mb-8">
