@@ -325,9 +325,11 @@ export default function ReviewQueue() {
     setPushing(true);
     try {
       if (!destination?.api) {
-        const response = await api.get(`/pipeline/runs/${runId}/export/${selectedPlatform}`, {
-          responseType: "blob",
-        });
+        const response = await api.post(
+          `/pipeline/runs/${runId}/export/${selectedPlatform}`,
+          { run_id: runId, listings: approved, approve_all: false, platform: selectedPlatform },
+          { responseType: "blob" },
+        );
         const url = URL.createObjectURL(response.data);
         const link = document.createElement("a");
         link.href = url;
