@@ -31,7 +31,7 @@ function runStatus(run) {
 }
 
 function runPlatform(run) {
-  return typeof run?.platform === "string" && run.platform ? run.platform : "pipeline";
+  return typeof run?.platform === "string" && run.platform ? run.platform : "multi-platform";
 }
 
 function runTotal(run) {
@@ -109,7 +109,7 @@ export default function Dashboard() {
         <div className="grid sm:grid-cols-3 gap-4 mb-8">
           {[
             { to:"/image-gen", icon:<Wand2 className="w-5 h-5" />,    title:"Generate Images",   desc:"AI art → review → pipeline" },
-            { to:"/pipeline",  icon:<Zap className="w-5 h-5" />,      title:"New Pipeline Run",  desc:"Upload art → push to platform" },
+            { to:"/pipeline",  icon:<Zap className="w-5 h-5" />,      title:"New Pipeline Run",  desc:"Upload art → process → choose destination" },
             { to:"/schedules", icon:<Calendar className="w-5 h-5" />, title:"Manage Schedules",  desc:"Automate your pipeline runs" },
           ].map(action => (
             <Link key={action.to} to={action.to}
