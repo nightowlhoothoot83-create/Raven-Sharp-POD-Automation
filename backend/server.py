@@ -489,7 +489,7 @@ async def _process_image_gen(batch_id: str, user_id: str, full_prompt: str,
                 if runware_result and runware_result.get("image_url"):
                     img_res = await client_http.get(runware_result["image_url"])
                     if img_res.is_success:
-                        generated.append({"index": i, "base64": base64.b64encode(img_res.content).decode(), "provider": "runware"})
+                        generated.append({"index": i, "url": runware_result["image_url"], "base64": base64.b64encode(img_res.content).decode(), "provider": "runware"})
                     else:
                         await db.image_gen_batches.update_one(
                             {"id": batch_id},
@@ -515,9 +515,11 @@ async def _process_image_gen(batch_id: str, user_id: str, full_prompt: str,
 
     await db.users.update_one({"id": user_id},
                                {"$inc": {"ai_gen_credits_used": len(generated)}})
+    final_status = "pending_review" if generated else "failed"
+    final_step = "Done" if generated else "Generation failed — see errors"
     await db.image_gen_batches.update_one(
         {"id": batch_id},
-        {"$set": {"status": "pending_review", "current_step": "Done"}}
+        {"$set": {"status": final_status, "current_step": final_step}}
     )
 
 
