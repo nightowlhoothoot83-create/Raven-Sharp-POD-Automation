@@ -1392,6 +1392,44 @@ async def get_gelato_templates(user: dict = Depends(get_user)):
     return user.get("gelato_template_ids", {})
 
 # ── CSV Bulk Download ─────────────────────────────────────────────────────────
+@api.post("/pipeline/runs/{run_id}/export/{platform}")
+async def export_approved_platform_csv(run_id: str, platform: str,
+                                       payload: ListingApprovalIn,
+                                       user: dict = Depends(get_user)):
+    """Download a marketplace CSV containing only listings approved in review."""
+    run = await db.pipeline_runs.find_one({"id": run_id, "user_id": user["id"]})
+    if not run:
+        raise HTTPException(404, "Run not found")
+    if platform not in {"redbubble", "teepublic", "merch"}:
+        raise HTTPException(400, f"CSV export is not supported for {platform}")
+
+    packages = []
+    for listing in payload.listings:
+        analysis = listing.get("analysis", {})
+        if platform == "redbubble":
+            packages.append(generate_redbubble_package(listing, analysis))
+        elif platform == "teepublic":
+            packages.append(generate_teepublic_package(listing, analysis))
+        else:
+            packages.append(generate_merch_amazon_package(listing, analysis))
+
+    csv_str = generate_csv_download(packages, platform)
+    await db.pipeline_runs.update_one(
+        {"id": run_id},
+        {"$set": {"last_export_platform": platform},
+         "$push": {"export_history": {
+             "platform": platform, "successful": len(packages), "failed": 0,
+             "created_at": datetime.now(timezone.utc)
+         }}}
+    )
+    from fastapi.responses import Response as FastAPIResponse
+    return FastAPIResponse(
+        content=csv_str,
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename=raven-sharp-{platform}-{run_id[:8]}.csv"}
+    )
+
+
 @api.get("/pipeline/runs/{run_id}/export/{platform}")
 async def export_platform_csv(run_id: str, platform: str,
                                user: dict = Depends(get_user)):
