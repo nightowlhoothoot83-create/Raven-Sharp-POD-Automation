@@ -850,6 +850,7 @@ Return this exact JSON structure:
 {{
   "artwork_type": "A" | "B" | "C" | "D" | "E",
   "artwork_description": "brief description of the artwork style, colours, mood, AND orientation/composition (landscape/portrait/square, wide scene vs detailed close-up, etc.)",
+  "seo_filename": "5-8 lowercase hyphenated words describing the exact subject, colours and style, ending in -pod",
   "recommended_products": [
     {{
       "product": "product name",
@@ -1007,13 +1008,21 @@ async def _process_one_pipeline_image(run_id, idx, total, img_data, platform, ma
             upscaled_b64 = await true_upscale(image_b64, mime, scale=4)
             upscaled_b64 = apply_dpi_and_bleed(upscaled_b64, dpi=img_data.get("dpi", 300), add_bleed=img_data.get("addBleed", False))
 
-        # Rename BEFORE product choice/listing — the SEO filename step needs
-        # to happen first so the chosen name is what actually gets used for
-        # the uploaded file and can inform the listing that follows.
+        # One Claude Vision call supplies every visual result, including the
+        # SEO filename. This avoids paying for a second vision request per image.
+        await set_step("analysing artwork and generating SEO")
+        log.info(f"[{run_id}] Analysing {name} with Claude Vision...")
+        analysis = await analyse_with_claude(upscaled_b64, mime, platform, market, price_tier)
+
         if not seo_name:
-            await set_step("generating SEO filename")
-            log.info(f"[{run_id}] Generating SEO filename for {name}...")
-            seo_name = await generate_seo_filename(upscaled_b64, mime, fallback_name=name)
+            proposed_name = str(analysis.get("seo_filename") or "").lower().strip()
+            proposed_name = re.sub(r"[^a-z0-9]+", "-", proposed_name).strip("-")
+            if proposed_name and not proposed_name.endswith("-pod"):
+                proposed_name += "-pod"
+            if len(proposed_name.split("-")) < 5:
+                fallback_stem = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+                proposed_name = f"{fallback_stem or 'original-artwork'}-print-on-demand-pod"
+            seo_name = proposed_name[:120]
 
         if public_url:
             log.info(f"[{run_id}] {name}: reusing already-uploaded R2 url (checkpoint)")
@@ -1021,10 +1030,6 @@ async def _process_one_pipeline_image(run_id, idx, total, img_data, platform, ma
             await set_step("uploading to storage")
             log.info(f"[{run_id}] Uploading {seo_name} to R2...")
             public_url = await upload_to_r2(upscaled_b64, f"{uuid.uuid4()}-{seo_name}.png")
-
-        await set_step("analysing with Claude Vision")
-        log.info(f"[{run_id}] Analysing {name} with Claude Vision...")
-        analysis = await analyse_with_claude(upscaled_b64, mime, platform, market, price_tier)
 
         return {
             "id": checkpoint.get("id") or str(uuid.uuid4()),
