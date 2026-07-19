@@ -1241,14 +1241,23 @@ async def approve_listings(run_id: str, payload: ListingApprovalIn,
     for listing in approved_listings:
         try:
             result = await push_to_platform(listing, platform, user)
-            push_results.append({"listing_id": listing.get("id"),
-                                  "status": "published", "result": result})
+            if platform in {"printify", "printful", "gelato"}:
+                ready_count = int(result.get("drafts_ready", result.get("count", 0)) or 0)
+                status = "draft_ready" if ready_count > 0 else "failed"
+                entry = {"listing_id": listing.get("id"), "status": status,
+                         "drafts_ready": ready_count, "result": result}
+                if ready_count == 0:
+                    entry["error"] = "No product returned an authentic provider mockup"
+                push_results.append(entry)
+            else:
+                push_results.append({"listing_id": listing.get("id"),
+                                     "status": "draft_ready", "result": result})
         except Exception as e:
             push_results.append({"listing_id": listing.get("id"),
                                   "status": "failed", "error": str(e)})
 
     # Update run status
-    success = sum(1 for r in push_results if r["status"] == "published")
+    success = sum(1 for r in push_results if r["status"] == "draft_ready")
     await db.pipeline_runs.update_one(
         {"id": run_id},
         {"$set": {"status": "completed", "approved_count": success,
@@ -1260,7 +1269,7 @@ async def approve_listings(run_id: str, payload: ListingApprovalIn,
              "created_at": datetime.now(timezone.utc)
          }}})
 
-    return {"run_id": run_id, "pushed": success,
+    return {"run_id": run_id, "pushed": success, "drafts_ready": success,
             "failed": len(push_results) - success, "results": push_results}
 
 # ── Platform push ─────────────────────────────────────────────────────────────
