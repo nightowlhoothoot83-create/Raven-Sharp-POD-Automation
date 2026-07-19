@@ -331,7 +331,7 @@ export default function ReviewQueue() {
         const url = URL.createObjectURL(response.data);
         const link = document.createElement("a");
         link.href = url;
-        link.download = `raven-sharp-${selectedPlatform}-${runId}.zip`;
+        link.download = `raven-sharp-${selectedPlatform}-${runId}.csv`;
         document.body.appendChild(link);
         link.click();
         link.remove();
