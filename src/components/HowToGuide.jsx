@@ -37,7 +37,7 @@ export default function HowToGuide() {
     { n: 2, title: "Set the run", body: "Choose market and pricing guidance. The artwork is processed once, independently of any provider." },
     { n: 3, title: "Process", body: "Raven Sharp upscales, prepares print files, analyses product fit and writes reusable SEO copy." },
     { n: 4, title: "Review & approve", body: "Edit titles, tags, prices and products. Nothing is sent anywhere while you review." },
-    { n: 5, title: "Choose destination", body: "Only now choose a connected provider to create drafts, or a marketplace to download its CSV package." },
+    { n: 5, title: "Choose destination", body: "Choose a provider to create separate unpublished product drafts. Each must receive at least one authentic matching mockup before it is marked ready." },
   ];
 
   return (
