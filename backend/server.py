@@ -12,7 +12,7 @@ from typing import Optional, List, Dict, Any
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from dotenv import load_dotenv
-import os, uuid, json, logging, httpx, base64, bcrypt, jwt, asyncio, hmac, hashlib, io
+import os, uuid, json, logging, httpx, base64, bcrypt, jwt, asyncio, hmac, hashlib, io, re
 from PIL import Image
 from platforms import (push_printify_full, push_gelato_full, push_printful_full,
     push_etsy_draft, etsy_auth_url, etsy_exchange_token,
@@ -187,7 +187,9 @@ class StyleProfileIn(BaseModel):
     reference_image_url: Optional[str] = None  # if set, generation uses Runware (real character-consistency support) instead of FLUX Schnell (which has none)
 
 class PipelineRunIn(BaseModel):
-    platform: str
+    # Optional for backwards compatibility. New runs are platform-neutral;
+    # the destination is selected after review/export.
+    platform: Optional[str] = None
     images: List[Dict[str, Any]]  # [{name, base64, mime}]
     style_profile_id: Optional[str] = None
     market: Optional[str] = "global"
@@ -222,6 +224,7 @@ class ListingApprovalIn(BaseModel):
     run_id: str
     listings: List[Dict[str, Any]]  # approved/edited listings
     approve_all: bool = False
+    platform: Optional[str] = None  # chosen at the final publish/export stage
 
 class StripeCheckoutIn(BaseModel):
     tier: str
@@ -489,7 +492,7 @@ async def _process_image_gen(batch_id: str, user_id: str, full_prompt: str,
                 if runware_result and runware_result.get("image_url"):
                     img_res = await client_http.get(runware_result["image_url"])
                     if img_res.is_success:
-                        generated.append({"index": i, "base64": base64.b64encode(img_res.content).decode(), "provider": "runware"})
+                        generated.append({"index": i, "url": runware_result["image_url"], "base64": base64.b64encode(img_res.content).decode(), "provider": "runware"})
                     else:
                         await db.image_gen_batches.update_one(
                             {"id": batch_id},
@@ -515,9 +518,11 @@ async def _process_image_gen(batch_id: str, user_id: str, full_prompt: str,
 
     await db.users.update_one({"id": user_id},
                                {"$inc": {"ai_gen_credits_used": len(generated)}})
+    final_status = "pending_review" if generated else "failed"
+    final_step = "Done" if generated else "Generation failed — see errors"
     await db.image_gen_batches.update_one(
         {"id": batch_id},
-        {"$set": {"status": "pending_review", "current_step": "Done"}}
+        {"$set": {"status": final_status, "current_step": final_step}}
     )
 
 
@@ -806,14 +811,66 @@ def _format_artwork_type_guide() -> str:
     return "\n".join(lines)
 
 
-async def analyse_with_claude(image_base64: str, mime: str, platform: str,
+def prepare_claude_vision_image(image_base64: str, max_edge: int = 1568,
+                                max_bytes: int = 3_500_000) -> tuple[str, str]:
+    """Create a compact analysis-only copy for Claude Vision.
+
+    The full-resolution/upscaled artwork remains untouched for R2, mockups and
+    downloads. This prevents large print-ready PNGs from exceeding Anthropic's
+    request-size limit while retaining enough detail for product and SEO analysis.
+    """
+    try:
+        img = Image.open(io.BytesIO(base64.b64decode(image_base64)))
+        img.thumbnail((max_edge, max_edge), Image.Resampling.LANCZOS)
+
+        # JPEG is substantially smaller than a print-ready PNG. Composite any
+        # transparency over white so transparent artwork analyses correctly.
+        if img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info):
+            rgba = img.convert("RGBA")
+            background = Image.new("RGB", rgba.size, "white")
+            background.paste(rgba, mask=rgba.getchannel("A"))
+            img = background
+        else:
+            img = img.convert("RGB")
+
+        quality = 85
+        while True:
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=quality, optimize=True)
+            payload = buf.getvalue()
+            if len(payload) <= max_bytes:
+                log.info(
+                    "Claude analysis copy prepared: %sx%s, %.2f MB, quality=%s",
+                    img.width, img.height, len(payload) / 1_048_576, quality,
+                )
+                return base64.b64encode(payload).decode(), "image/jpeg"
+            if quality > 55:
+                quality -= 10
+                continue
+            new_size = (max(512, int(img.width * 0.8)),
+                        max(512, int(img.height * 0.8)))
+            if new_size == img.size:
+                raise ValueError("Could not reduce Claude analysis image below size limit")
+            img = img.resize(new_size, Image.Resampling.LANCZOS)
+    except Exception as e:
+        log.warning("Could not prepare compact Claude image; using original: %s", e)
+        return image_base64, "image/jpeg"
+
+
+async def analyse_with_claude(image_base64: str, mime: str, platform: Optional[str],
                                market: str, price_tier: str) -> dict:
     """Claude Vision — analyse image, pick products, write listing copy"""
     if not ANTHROPIC_KEY:
         raise HTTPException(500, "No Anthropic API key configured")
 
-    platform_info = PLATFORMS.get(platform, {})
-    platform_name = platform_info.get("name", platform)
+    platform_info = PLATFORMS.get(platform, {}) if platform else {}
+    platform_name = platform_info.get("name", platform) if platform else "platform-neutral POD marketplaces"
+    title_guidance = (f"optimised title for {platform_name} (max 140 chars)"
+                      if platform else
+                      "platform-neutral SEO title suitable for later adaptation (max 140 chars)")
+    tag_guidance = ("Tags: max 13 for Etsy, max 15 for Redbubble, unlimited for others."
+                    if platform else
+                    "Tags: return the 13 strongest reusable search tags; platform-specific limits are applied at export.")
 
     prompt = f"""You are an expert POD (print-on-demand) product strategist and copywriter.
 
@@ -839,6 +896,7 @@ Return this exact JSON structure:
 {{
   "artwork_type": "A" | "B" | "C" | "D" | "E",
   "artwork_description": "brief description of the artwork style, colours, mood, AND orientation/composition (landscape/portrait/square, wide scene vs detailed close-up, etc.)",
+  "seo_filename": "5-8 lowercase hyphenated words describing the exact subject, colours and style, ending in -pod",
   "recommended_products": [
     {{
       "product": "product name",
@@ -850,7 +908,7 @@ Return this exact JSON structure:
       "profit_margin": 0.00
     }}
   ],
-  "seo_title": "optimised title for {platform_name} (max 140 chars)",
+  "seo_title": "{title_guidance}",
   "description": "full listing description 150-300 words, engaging, keyword-rich",
   "tags": ["tag1", "tag2"],
   "primary_colour": "dominant colour",
@@ -858,9 +916,12 @@ Return this exact JSON structure:
   "target_audience": "who would buy this"
 }}
 
-Recommend 4-8 products that genuinely suit this artwork for {platform_name}.
+Recommend 4-8 products that genuinely suit this artwork across major POD marketplaces.
+Do not assume or require a fulfilment provider; the user chooses that after reviewing the results.
 Price in AUD for {market} market at {price_tier} pricing.
-Tags: max 13 for Etsy, max 15 for Redbubble, unlimited for others."""
+{tag_guidance}"""
+
+    analysis_image_base64, analysis_mime = prepare_claude_vision_image(image_base64)
 
     async with httpx.AsyncClient(timeout=60) as client_http:
         res = await client_http.post(
@@ -869,17 +930,33 @@ Tags: max 13 for Etsy, max 15 for Redbubble, unlimited for others."""
                      "anthropic-version": "2023-06-01",
                      "content-type": "application/json"},
             json={"model": "claude-sonnet-5",
-                  "max_tokens": 2000,
+                  # Product strategy can legitimately exceed 2,000 tokens (4-8 products,
+                  # listing copy, tags and reasoning). A low cap truncates valid JSON mid-string.
+                  "max_tokens": 6000,
                   "messages": [{"role": "user", "content": [
                       {"type": "image", "source": {
-                          "type": "base64", "media_type": mime,
-                          "data": image_base64}},
+                          "type": "base64", "media_type": analysis_mime,
+                          "data": analysis_image_base64}},
                       {"type": "text", "text": prompt}]}]})
 
     if res.status_code != 200:
         raise HTTPException(500, f"Claude API error: {res.text}")
 
-    content = res.json()["content"][0]["text"].strip()
+    response_data = res.json()
+    # Claude may return non-text blocks before the answer (for example
+    # thinking/redacted-thinking blocks). Collect only actual text blocks
+    # instead of assuming content[0] always contains a "text" key.
+    content = "".join(
+        block.get("text", "")
+        for block in response_data.get("content", [])
+        if block.get("type") == "text"
+    ).strip()
+    if not content:
+        block_types = [block.get("type", "unknown") for block in response_data.get("content", [])]
+        raise HTTPException(
+            500,
+            f"Claude returned no text response (blocks: {', '.join(block_types) or 'none'})",
+        )
     # Strip markdown code fences if present
     if content.startswith("```"):
         content = content.split("```")[1]
@@ -995,13 +1072,21 @@ async def _process_one_pipeline_image(run_id, idx, total, img_data, platform, ma
             upscaled_b64 = await true_upscale(image_b64, mime, scale=4)
             upscaled_b64 = apply_dpi_and_bleed(upscaled_b64, dpi=img_data.get("dpi", 300), add_bleed=img_data.get("addBleed", False))
 
-        # Rename BEFORE product choice/listing — the SEO filename step needs
-        # to happen first so the chosen name is what actually gets used for
-        # the uploaded file and can inform the listing that follows.
+        # One Claude Vision call supplies every visual result, including the
+        # SEO filename. This avoids paying for a second vision request per image.
+        await set_step("analysing artwork and generating SEO")
+        log.info(f"[{run_id}] Analysing {name} with Claude Vision...")
+        analysis = await analyse_with_claude(upscaled_b64, mime, platform, market, price_tier)
+
         if not seo_name:
-            await set_step("generating SEO filename")
-            log.info(f"[{run_id}] Generating SEO filename for {name}...")
-            seo_name = await generate_seo_filename(upscaled_b64, mime, fallback_name=name)
+            proposed_name = str(analysis.get("seo_filename") or "").lower().strip()
+            proposed_name = re.sub(r"[^a-z0-9]+", "-", proposed_name).strip("-")
+            if proposed_name and not proposed_name.endswith("-pod"):
+                proposed_name += "-pod"
+            if len(proposed_name.split("-")) < 5:
+                fallback_stem = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+                proposed_name = f"{fallback_stem or 'original-artwork'}-print-on-demand-pod"
+            seo_name = proposed_name[:120]
 
         if public_url:
             log.info(f"[{run_id}] {name}: reusing already-uploaded R2 url (checkpoint)")
@@ -1009,10 +1094,6 @@ async def _process_one_pipeline_image(run_id, idx, total, img_data, platform, ma
             await set_step("uploading to storage")
             log.info(f"[{run_id}] Uploading {seo_name} to R2...")
             public_url = await upload_to_r2(upscaled_b64, f"{uuid.uuid4()}-{seo_name}.png")
-
-        await set_step("analysing with Claude Vision")
-        log.info(f"[{run_id}] Analysing {name} with Claude Vision...")
-        analysis = await analyse_with_claude(upscaled_b64, mime, platform, market, price_tier)
 
         return {
             "id": checkpoint.get("id") or str(uuid.uuid4()),
@@ -1024,16 +1105,17 @@ async def _process_one_pipeline_image(run_id, idx, total, img_data, platform, ma
             "status": "pending_review",
             "platform": platform,
             "edited": False,
-            "checkpoint": {"bg_removed_b64": bg_removed_b64, "upscaled_b64": upscaled_b64,
-                          "public_url": public_url, "seo_name": seo_name},
+            # Never persist full image base64 in MongoDB (16 MB document limit).
+            # The image itself lives in R2; Mongo stores only its URL and metadata.
+            "checkpoint": {"public_url": public_url, "seo_name": seo_name},
         }
     except Exception as e:
         log.error(f"[{run_id}] Pipeline error for {name}: {e}")
         # Preserve whatever succeeded so a retry can resume instead of restart
         # and re-pay for API calls that already completed.
         preserved = {}
-        if bg_removed_b64: preserved["bg_removed_b64"] = bg_removed_b64
-        if upscaled_b64: preserved["upscaled_b64"] = upscaled_b64
+        # Large base64 checkpoints can exceed MongoDB's 16 MB document limit.
+        # The retry endpoint accepts the source image again when no R2 URL exists.
         if public_url: preserved["public_url"] = public_url
         if seo_name: preserved["seo_name"] = seo_name
         return {
@@ -1167,7 +1249,7 @@ async def retry_pipeline_image(run_id: str, image_id: str, payload: PipelineRetr
         checkpoint["id"] = image_id
         new_item = await _process_one_pipeline_image(
             run_id, idx, total, img_payload,
-            run["platform"], "global", "mid",
+            run.get("platform"), "global", "mid",
             checkpoint=checkpoint,
         )
         results = run["results"]
@@ -1216,26 +1298,43 @@ async def approve_listings(run_id: str, payload: ListingApprovalIn,
     if not run: raise HTTPException(404, "Run not found")
 
     approved_listings = payload.listings
-    platform = run["platform"]
+    platform = payload.platform or run.get("platform")
+    if not platform:
+        raise HTTPException(400, "Choose a destination platform before publishing")
 
     push_results = []
     for listing in approved_listings:
         try:
             result = await push_to_platform(listing, platform, user)
-            push_results.append({"listing_id": listing.get("id"),
-                                  "status": "published", "result": result})
+            if platform in {"printify", "printful", "gelato"}:
+                ready_count = int(result.get("drafts_ready", result.get("count", 0)) or 0)
+                status = "draft_ready" if ready_count > 0 else "failed"
+                entry = {"listing_id": listing.get("id"), "status": status,
+                         "drafts_ready": ready_count, "result": result}
+                if ready_count == 0:
+                    entry["error"] = "No product returned an authentic provider mockup"
+                push_results.append(entry)
+            else:
+                push_results.append({"listing_id": listing.get("id"),
+                                     "status": "draft_ready", "result": result})
         except Exception as e:
             push_results.append({"listing_id": listing.get("id"),
                                   "status": "failed", "error": str(e)})
 
     # Update run status
-    success = sum(1 for r in push_results if r["status"] == "published")
+    success = sum(1 for r in push_results if r["status"] == "draft_ready")
     await db.pipeline_runs.update_one(
         {"id": run_id},
         {"$set": {"status": "completed", "approved_count": success,
-                  "completed_at": datetime.now(timezone.utc)}})
+                  "last_export_platform": platform,
+                  "completed_at": datetime.now(timezone.utc)},
+         "$push": {"export_history": {
+             "platform": platform, "successful": success,
+             "failed": len(push_results) - success,
+             "created_at": datetime.now(timezone.utc)
+         }}})
 
-    return {"run_id": run_id, "pushed": success,
+    return {"run_id": run_id, "pushed": success, "drafts_ready": success,
             "failed": len(push_results) - success, "results": push_results}
 
 # ── Platform push ─────────────────────────────────────────────────────────────
@@ -1372,6 +1471,44 @@ async def get_gelato_templates(user: dict = Depends(get_user)):
     return user.get("gelato_template_ids", {})
 
 # ── CSV Bulk Download ─────────────────────────────────────────────────────────
+@api.post("/pipeline/runs/{run_id}/export/{platform}")
+async def export_approved_platform_csv(run_id: str, platform: str,
+                                       payload: ListingApprovalIn,
+                                       user: dict = Depends(get_user)):
+    """Download a marketplace CSV containing only listings approved in review."""
+    run = await db.pipeline_runs.find_one({"id": run_id, "user_id": user["id"]})
+    if not run:
+        raise HTTPException(404, "Run not found")
+    if platform not in {"redbubble", "teepublic", "merch"}:
+        raise HTTPException(400, f"CSV export is not supported for {platform}")
+
+    packages = []
+    for listing in payload.listings:
+        analysis = listing.get("analysis", {})
+        if platform == "redbubble":
+            packages.append(generate_redbubble_package(listing, analysis))
+        elif platform == "teepublic":
+            packages.append(generate_teepublic_package(listing, analysis))
+        else:
+            packages.append(generate_merch_amazon_package(listing, analysis))
+
+    csv_str = generate_csv_download(packages, platform)
+    await db.pipeline_runs.update_one(
+        {"id": run_id},
+        {"$set": {"last_export_platform": platform},
+         "$push": {"export_history": {
+             "platform": platform, "successful": len(packages), "failed": 0,
+             "created_at": datetime.now(timezone.utc)
+         }}}
+    )
+    from fastapi.responses import Response as FastAPIResponse
+    return FastAPIResponse(
+        content=csv_str,
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename=raven-sharp-{platform}-{run_id[:8]}.csv"}
+    )
+
+
 @api.get("/pipeline/runs/{run_id}/export/{platform}")
 async def export_platform_csv(run_id: str, platform: str,
                                user: dict = Depends(get_user)):
@@ -1615,7 +1752,7 @@ async def health_stats(user: dict = Depends(get_user)):
         "timestamp": datetime.now(timezone.utc).isoformat()
     }
 
-@api.get("/")
+@app.get("/")
 async def root():
     return {"service": "raven-sharp-pod", "status": "ok",
             "version": "2.0", "part_of": "Ascension Digital Group"}

@@ -3,7 +3,7 @@ Raven Sharp POD Suite — Platform Push Handlers
 Handles all platform integrations: API-direct and CSV/package output
 Part of Ascension Digital Group
 """
-import httpx, csv, io, json, uuid, base64, os
+import httpx, csv, io, json, uuid, base64, os, asyncio
 from typing import Optional
 
 # ── PRINTIFY ──────────────────────────────────────────────────────────────────
@@ -178,135 +178,117 @@ def _match_blueprint_key(product_name_raw: str) -> Optional[str]:
 
 async def push_printify_full(listing: dict, analysis: dict, image_url: str,
                               api_key: str, shop_id: str) -> dict:
-    """Upload image, create products for recommended types, publish to Printify shop"""
+    """Create unpublished Printify products and keep their real mockups."""
     if not api_key:
         raise Exception("No Printify API key — go to Account → Connect Platforms")
     if not shop_id:
         raise Exception("No Printify shop ID — add it in Account → Connect Platforms")
 
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    published = []
-
+    drafts = []
     async with httpx.AsyncClient(timeout=60) as c:
-
-        # Step 1: Upload image to Printify
         img_res = await c.post(
             "https://api.printify.com/v1/uploads/images.json",
             headers=headers,
-            json={"file_name": f"raven-sharp-{uuid.uuid4()}.png", "url": image_url}
+            json={"file_name": f"raven-sharp-{uuid.uuid4()}.png", "url": image_url},
         )
         if img_res.status_code != 200:
             raise Exception(f"Printify image upload failed: {img_res.text[:200]}")
         image_id = img_res.json()["id"]
 
-        # Step 2: Get recommended products from Claude analysis
-        recommended = analysis.get("recommended_products", [])
-        if not recommended:
-            recommended = [{"product": "art print"}, {"product": "poster"}, {"product": "t_shirt"}]
-
-        # Step 3: Create product for each recommendation
+        recommended = analysis.get("recommended_products", []) or [
+            {"product": "art print"}, {"product": "poster"}, {"product": "t_shirt"}
+        ]
         price_tier = analysis.get("price_tier", "mid")
-        for rec in recommended[:8]:  # up to 8 products per run now that the catalog is fuller
+
+        for rec in recommended[:8]:
             product_name_raw = rec.get("product", "art print")
             blueprint_key = _match_blueprint_key(product_name_raw)
             if not blueprint_key:
-                published.append({"product": product_name_raw, "status": "skipped",
-                                   "reason": "No matching product in the researched catalog — not substituted with a generic fallback."})
+                drafts.append({"product": product_name_raw, "status": "skipped",
+                               "reason": "No matching Printify catalog product."})
                 continue
             blueprint = PRINTIFY_BLUEPRINTS[blueprint_key]
-
-            # Real provider selection + smart pricing (ported from the
-            # original working tool) instead of a hardcoded provider ID and
-            # a flat price fallback.
             best_provider = await get_best_provider_for_blueprint(blueprint["id"], api_key)
             if not best_provider:
-                # This is the actual fix for the 80% failure rate diagnosed
-                # previously: forcing a push with a guessed/default provider
-                # (print_provider_id: 99) when no provider was actually
-                # confirmed available is exactly what caused most publishes
-                # to fail silently. Skip instead of forcing it through.
-                published.append({"product": blueprint_key, "status": "skipped",
-                                   "reason": f"No available print provider found for {blueprint['note']} — not force-pushed with a guessed provider."})
+                drafts.append({"product": blueprint_key, "status": "skipped",
+                               "reason": "No available print provider found."})
                 continue
 
             provider_id = best_provider["id"]
-            base_cost_usd = best_provider["base_cost_usd"]
-            retail_price = calc_smart_retail(base_cost_usd, price_tier)
-
-            # Live variant IDs from the ACTUAL chosen provider — never
-            # hardcoded, since a hardcoded variant ID has no guarantee of
-            # matching what this specific provider actually offers.
             variant_ids = [v["id"] for v in best_provider["variants"]]
             if not variant_ids:
-                published.append({"product": blueprint_key, "status": "skipped",
-                                   "reason": "Provider returned no usable variants."})
+                drafts.append({"product": blueprint_key, "status": "skipped",
+                               "reason": "Provider returned no usable variants."})
                 continue
 
-            variants = [{"id": vid,
-                          "price": int(retail_price * 100),  # Printify uses cents
-                          "is_enabled": True}
-                        for vid in variant_ids]
-
-            product_payload = {
-                "title": analysis.get("seo_title", f"Art Print — {blueprint_key.replace('_',' ').title()}"),
+            base_cost_usd = best_provider["base_cost_usd"]
+            retail_price = calc_smart_retail(base_cost_usd, price_tier)
+            payload = {
+                "title": analysis.get("seo_title", blueprint_key.replace("_", " ").title()),
                 "description": analysis.get("description", ""),
                 "blueprint_id": blueprint["id"],
                 "print_provider_id": provider_id,
-                "variants": variants,
+                "variants": [{"id": vid, "price": int(retail_price * 100),
+                              "is_enabled": True} for vid in variant_ids],
                 "print_areas": [{
                     "variant_ids": variant_ids,
                     "placeholders": [{
                         "position": blueprint["position"],
-                        "images": [{
-                            "id": image_id,
-                            "x": 0.5, "y": 0.5,
-                            "scale": 1.0, "angle": 0
-                        }]
-                    }]
+                        "images": [{"id": image_id, "x": 0.5, "y": 0.5,
+                                    "scale": 1.0, "angle": 0}],
+                    }],
                 }],
-                "tags": analysis.get("tags", [])[:13]
+                "tags": analysis.get("tags", [])[:13],
             }
-
             create_res = await c.post(
                 f"https://api.printify.com/v1/shops/{shop_id}/products.json",
-                headers=headers, json=product_payload
+                headers=headers, json=payload,
             )
-            if create_res.status_code not in [200, 201]:
-                published.append({"product": blueprint_key, "status": "failed",
-                                   "error": create_res.text[:200]})
+            if create_res.status_code not in (200, 201):
+                drafts.append({"product": blueprint_key, "status": "failed",
+                               "error": create_res.text[:200]})
                 continue
 
-            product_id = create_res.json()["id"]
+            product = create_res.json()
+            product_id = product["id"]
+            mockup_url = next((m.get("src") for m in product.get("images", [])
+                               if m.get("src")), None)
 
-            # Real Printify-generated mockup (not custom compositing) —
-            # best-effort, doesn't block publishing if it fails.
-            mockup_url = await generate_printify_mockup(blueprint["id"], provider_id, variant_ids[0], image_id, api_key)
+            # Mockups can be generated asynchronously. Retrieve the product
+            # until at least one provider image is available; never publish it.
+            for _ in range(6):
+                if mockup_url:
+                    break
+                await asyncio.sleep(2)
+                get_res = await c.get(
+                    f"https://api.printify.com/v1/shops/{shop_id}/products/{product_id}.json",
+                    headers=headers,
+                )
+                if get_res.status_code == 200:
+                    product = get_res.json()
+                    mockup_url = next((m.get("src") for m in product.get("images", [])
+                                       if m.get("src")), None)
 
-            # Step 4: Publish to connected sales channel
-            pub_res = await c.post(
-                f"https://api.printify.com/v1/shops/{shop_id}/products/{product_id}/publish.json",
-                headers=headers,
-                json={"title": True, "description": True, "images": True,
-                      "variants": True, "tags": True, "keyFeatures": True,
-                      "shipping_template": True}
-            )
-
-            published.append({
+            status = "draft_ready" if mockup_url else "mockup_required"
+            drafts.append({
                 "product": blueprint_key,
                 "printify_id": product_id,
-                "status": "published" if pub_res.status_code in [200, 201] else "draft",
-                "note": blueprint["note"],
+                "status": status,
+                "mockup_url": mockup_url,
+                "mockups": [m.get("src") for m in product.get("images", []) if m.get("src")],
+                "note": "Unpublished Printify product",
                 "provider": best_provider["title"],
                 "base_cost_usd": round(base_cost_usd, 2),
                 "retail_price": retail_price,
-                "margin_pct": round(((retail_price - base_cost_usd) / retail_price) * 100) if retail_price else None,
-                "mockup_url": mockup_url,
-                "url": f"https://printify.com/app/store/{shop_id}/products/{product_id}"
+                "margin_pct": round(((retail_price - base_cost_usd) / retail_price) * 100)
+                              if retail_price else None,
+                "url": f"https://printify.com/app/store/{shop_id}/products/{product_id}",
             })
 
-    return {"platform": "printify", "image_id": image_id, "published": published,
-            "count": len([p for p in published if p["status"] == "published"])}
-
+    ready = [p for p in drafts if p["status"] == "draft_ready"]
+    return {"platform": "printify", "image_id": image_id, "published": drafts,
+            "count": len(ready), "drafts_ready": len(ready)}
 
 # ── GELATO ────────────────────────────────────────────────────────────────────
 # Template-based product creation — user sets up templates in Gelato dashboard once
@@ -345,144 +327,208 @@ def _match_catalog_key(product_name_raw: str, catalog: dict) -> Optional[str]:
 async def push_gelato_full(listing: dict, analysis: dict, image_url: str,
                             api_key: str, store_id: str,
                             template_ids: Optional[dict] = None) -> dict:
-    """Create products in Gelato — uses template IDs if available, falls back to direct UIDs"""
+    """Create hidden Gelato products from templates and retain previews."""
     if not api_key:
         raise Exception("No Gelato API key — go to Account → Connect Platforms")
     if not store_id:
         raise Exception("No Gelato store ID — add it in Account → Connect Platforms")
 
     headers = {"X-API-KEY": api_key, "Content-Type": "application/json"}
-    published = []
-    recommended = analysis.get("recommended_products", [])
-    if not recommended:
-        recommended = [{"product": "art print"}, {"product": "poster"}]
+    drafts = []
+    recommended = analysis.get("recommended_products", []) or [
+        {"product": "art print"}, {"product": "poster"}
+    ]
 
     async with httpx.AsyncClient(timeout=60) as c:
         for rec in recommended[:5]:
-            product_name_raw = rec.get("product", "art print")
-            uid_key = _match_catalog_key(product_name_raw, GELATO_UIDS)
-            if not uid_key:
-                published.append({"product": product_name_raw, "status": "skipped",
-                                   "reason": "No matching product in the Gelato catalog — not substituted with a generic fallback."})
+            product_name = rec.get("product", "art print")
+            uid_key = _match_catalog_key(product_name, GELATO_UIDS)
+            template_id = (template_ids or {}).get(uid_key) if uid_key else None
+            if not template_id:
+                drafts.append({"product": product_name, "status": "mockup_required",
+                               "reason": "A Gelato template ID is required for authentic mockups."})
                 continue
-            uid = GELATO_UIDS[uid_key]
-            price_cents = int(rec.get("price_usd", 29) * 100)
 
-            # Try template-based creation first (cleaner output, mockups included)
-            template_id = (template_ids or {}).get(uid_key)
-            if template_id:
-                payload = {
-                    "templateId": template_id,
-                    "title": analysis.get("seo_title", ""),
-                    "description": analysis.get("description", ""),
-                    "imagePlaceholders": [{"name": "front", "url": image_url}],
-                    "isVisibleInTheOnlineStore": True,
-                    "tags": analysis.get("tags", [])[:10],
-                    "salesChannels": [{"type": "ecommerce", "enabled": True}]
-                }
-                res = await c.post(
-                    f"https://ecommerce.gelatoapis.com/v1/stores/{store_id}/products:create-from-template",
-                    headers=headers, json=payload
+            template_res = await c.get(
+                f"https://ecommerce.gelatoapis.com/v1/stores/{store_id}/templates/{template_id}",
+                headers=headers,
+            )
+            if template_res.status_code != 200:
+                drafts.append({"product": product_name, "status": "failed",
+                               "error": f"Could not load Gelato template: {template_res.text[:180]}"})
+                continue
+            template = template_res.json()
+            variants = []
+            for variant in template.get("variants", []):
+                variant_id = variant.get("id") or variant.get("templateVariantId")
+                placeholders = variant.get("imagePlaceholders", [])
+                placeholder_name = (placeholders[0].get("name") if placeholders else None) or "front"
+                if variant_id:
+                    variants.append({
+                        "templateVariantId": variant_id,
+                        "imagePlaceholders": [{
+                            "name": placeholder_name,
+                            "fileUrl": image_url,
+                            "fitMethod": "meet",
+                        }],
+                    })
+
+            if not variants:
+                drafts.append({"product": product_name, "status": "failed",
+                               "error": "Gelato template returned no usable variants."})
+                continue
+
+            payload = {
+                "templateId": template_id,
+                "title": analysis.get("seo_title", product_name),
+                "description": analysis.get("description", ""),
+                "isVisibleInTheOnlineStore": False,
+                "tags": analysis.get("tags", [])[:13],
+                "variants": variants,
+            }
+            res = await c.post(
+                f"https://ecommerce.gelatoapis.com/v1/stores/{store_id}/products:create-from-template",
+                headers=headers, json=payload,
+            )
+            if res.status_code not in (200, 201):
+                drafts.append({"product": product_name, "status": "failed",
+                               "error": res.text[:200]})
+                continue
+
+            product = res.json()
+            product_id = product.get("id")
+            preview_url = product.get("previewUrl")
+            for _ in range(8):
+                if preview_url:
+                    break
+                await asyncio.sleep(2)
+                get_res = await c.get(
+                    f"https://ecommerce.gelatoapis.com/v1/stores/{store_id}/products/{product_id}",
+                    headers=headers,
                 )
-            else:
-                # Direct product creation without template
-                payload = {
-                    "title": analysis.get("seo_title", ""),
-                    "description": analysis.get("description", ""),
-                    "isVisibleInTheOnlineStore": True,
-                    "tags": analysis.get("tags", [])[:10],
-                    "salesChannels": [{"type": "ecommerce", "enabled": True}],
-                    "variants": [{
-                        "title": rec.get("product", ""),
-                        "productUid": uid,
-                        "imagePlaceholders": [{"name": "front", "printArea": "default",
-                                               "url": image_url}],
-                        "retail_price": price_cents
-                    }]
-                }
-                res = await c.post(
-                    f"https://ecommerce.gelatoapis.com/v1/stores/{store_id}/products",
-                    headers=headers, json=payload
-                )
+                if get_res.status_code == 200:
+                    product = get_res.json()
+                    preview_url = product.get("previewUrl")
 
-            if res.status_code in [200, 201]:
-                data = res.json()
-                published.append({
-                    "product": rec.get("product"),
-                    "gelato_id": data.get("id"),
-                    "status": "published",
-                    "url": data.get("externalPreviewUrl", "")
-                })
-            else:
-                published.append({
-                    "product": rec.get("product"),
-                    "status": "failed",
-                    "error": res.text[:200]
-                })
+            status = "draft_ready" if preview_url else "mockup_required"
+            drafts.append({
+                "product": product_name,
+                "gelato_id": product_id,
+                "status": status,
+                "mockup_url": preview_url,
+                "mockups": [preview_url] if preview_url else [],
+                "note": "Hidden Gelato product",
+                "url": product.get("externalPreviewUrl") or preview_url or "",
+            })
 
-    return {"platform": "gelato", "published": published,
-            "count": len([p for p in published if p["status"] == "published"])}
-
+    ready = [p for p in drafts if p["status"] == "draft_ready"]
+    return {"platform": "gelato", "published": drafts,
+            "count": len(ready), "drafts_ready": len(ready)}
 
 # ── PRINTFUL ──────────────────────────────────────────────────────────────────
 
 async def push_printful_full(listing: dict, analysis: dict, image_url: str,
                               api_key: str) -> dict:
-    """Create sync products in Printful"""
+    """Create Printful Sync Products and generate one authentic mockup each."""
     if not api_key:
         raise Exception("No Printful API key — go to Account → Connect Platforms")
 
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    published = []
-    recommended = analysis.get("recommended_products", [])[:3]
+    drafts = []
+    recommended = analysis.get("recommended_products", [])[:6]
 
-    PRINTFUL_VARIANTS = {
-        "t_shirt": [{"id": 4012, "price": 29.00}],  # Unisex Staple T-Shirt | Bella + Canvas 3001
-        "poster":  [{"id": 1,    "price": 19.00}],  # Poster
-        "canvas":  [{"id": 4072, "price": 45.00}],  # Canvas
-        "mug":     [{"id": 1320, "price": 15.00}],  # White Glossy Mug
+    catalog = {
+        "t_shirt": {"product_id": 71, "variant_id": 4012, "price": 29.00, "placement": "front"},
+        "poster": {"product_id": 1, "variant_id": 1, "price": 19.00, "placement": "default"},
+        "canvas": {"product_id": 3, "variant_id": 4072, "price": 45.00, "placement": "default"},
+        "mug": {"product_id": 19, "variant_id": 1320, "price": 15.00, "placement": "default"},
     }
 
     async with httpx.AsyncClient(timeout=60) as c:
         for rec in recommended:
-            product_name = rec.get("product", "poster").lower().replace(" ", "_")
-            variant_key = next((k for k in PRINTFUL_VARIANTS if k in product_name), "poster")
-            variants = PRINTFUL_VARIANTS[variant_key]
+            product_name = rec.get("product", "poster")
+            normalized = product_name.lower().replace(" ", "_")
+            key = next((k for k in catalog if k in normalized), None)
+            if not key:
+                drafts.append({"product": product_name, "status": "skipped",
+                               "reason": "No verified Printful catalog mapping."})
+                continue
+            item = catalog[key]
+
+            task_res = await c.post(
+                f"https://api.printful.com/mockup-generator/create-task/{item['product_id']}",
+                headers=headers,
+                json={
+                    "variant_ids": [item["variant_id"]],
+                    "format": "jpg",
+                    "width": 1200,
+                    "files": [{"placement": item["placement"], "image_url": image_url}],
+                },
+            )
+            mockup_url = None
+            mockups = []
+            if task_res.status_code == 200:
+                task = task_res.json().get("result", {})
+                task_key = task.get("task_key")
+                if task.get("status") == "completed":
+                    mockups = task.get("mockups", [])
+                elif task_key:
+                    for _ in range(8):
+                        await asyncio.sleep(3)
+                        result_res = await c.get(
+                            "https://api.printful.com/mockup-generator/task",
+                            headers=headers, params={"task_key": task_key},
+                        )
+                        if result_res.status_code == 200:
+                            result = result_res.json().get("result", {})
+                            if result.get("status") == "completed":
+                                mockups = result.get("mockups", [])
+                                break
+                            if result.get("status") == "failed":
+                                break
+
+            urls = []
+            for mockup in mockups:
+                if mockup.get("mockup_url"):
+                    urls.append(mockup["mockup_url"])
+                for extra in mockup.get("extra", []):
+                    if extra.get("url"):
+                        urls.append(extra["url"])
+            mockup_url = urls[0] if urls else None
 
             payload = {
                 "sync_product": {
-                    "name": analysis.get("seo_title", rec.get("product", "")),
-                    "thumbnail": image_url
+                    "name": analysis.get("seo_title", product_name),
+                    "thumbnail": mockup_url or image_url,
                 },
                 "sync_variants": [{
-                    "retail_price": str(v["price"]),
-                    "variant_id": v["id"],
-                    "files": [{"url": image_url, "type": "front"}]
-                } for v in variants]
+                    "retail_price": str(item["price"]),
+                    "variant_id": item["variant_id"],
+                    "files": [{"url": image_url, "type": item["placement"]}],
+                }],
             }
+            res = await c.post("https://api.printful.com/store/products",
+                               headers=headers, json=payload)
+            if res.status_code not in (200, 201):
+                drafts.append({"product": product_name, "status": "failed",
+                               "error": res.text[:200], "mockup_url": mockup_url})
+                continue
 
-            res = await c.post(
-                "https://api.printful.com/store/products",
-                headers=headers, json=payload
-            )
+            product = res.json().get("result", {})
+            status = "draft_ready" if mockup_url else "mockup_required"
+            drafts.append({
+                "product": product_name,
+                "printful_id": product.get("id"),
+                "status": status,
+                "mockup_url": mockup_url,
+                "mockups": urls,
+                "note": "Unpublished Printful Sync Product",
+                "url": "https://www.printful.com/dashboard/sync",
+            })
 
-            if res.status_code in [200, 201]:
-                data = res.json().get("result", {})
-                published.append({
-                    "product": rec.get("product"),
-                    "printful_id": data.get("id"),
-                    "status": "synced",
-                    "url": f"https://www.printful.com/dashboard/sync"
-                })
-            else:
-                published.append({
-                    "product": rec.get("product"),
-                    "status": "failed", "error": res.text[:200]
-                })
-
-    return {"platform": "printful", "published": published,
-            "count": len([p for p in published if p["status"] == "synced"])}
-
+    ready = [p for p in drafts if p["status"] == "draft_ready"]
+    return {"platform": "printful", "published": drafts,
+            "count": len(ready), "drafts_ready": len(ready)}
 
 # ── ETSY ──────────────────────────────────────────────────────────────────────
 # Creates draft listings — user reviews and publishes in Etsy dashboard

@@ -33,11 +33,11 @@ export default function HowToGuide() {
   }
 
   const steps = [
-    { n: 1, title: "Choose a platform", body: "Pick which print-on-demand platform you're pushing this run to (Printify, Gelato, Etsy, etc.)." },
-    { n: 2, title: "Upload your artwork", body: "Upload the source image(s) you want turned into product listings." },
-    { n: 3, title: "Set your run settings", body: "Choose how many images, product types and any AI generation options for this run." },
-    { n: 4, title: "Run & review", body: "The pipeline processes each image, then hands you a review queue — check the results before anything gets pushed live." },
-    { n: 5, title: "Push or export", body: "Approve and push straight to your chosen platform, or export as a CSV/download if you'd rather list manually." },
+    { n: 1, title: "Upload artwork", body: "Add source images or send generated artwork into the pipeline. No provider connection is needed yet." },
+    { n: 2, title: "Set the run", body: "Choose market and pricing guidance. The artwork is processed once, independently of any provider." },
+    { n: 3, title: "Process", body: "Raven Sharp upscales, prepares print files, analyses product fit and writes reusable SEO copy." },
+    { n: 4, title: "Review & approve", body: "Edit titles, tags, prices and products. Nothing is sent anywhere while you review." },
+    { n: 5, title: "Choose destination", body: "Choose a provider to create separate unpublished product drafts. Each must receive at least one authentic matching mockup before it is marked ready." },
   ];
 
   return (

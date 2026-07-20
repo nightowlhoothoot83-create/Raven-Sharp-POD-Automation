@@ -47,13 +47,26 @@ export default function ImageGen() {
       .catch(() => {});
   }, []);
 
+  useEffect(() => {
+    if (!batches.some(b => b.status === "processing")) return;
+    const timer = setInterval(async () => {
+      try {
+        const { data } = await api.get("/image-gen/batches");
+        setBatches(data);
+      } catch {
+        // Keep the current history visible if a refresh briefly fails.
+      }
+    }, 3000);
+    return () => clearInterval(timer);
+  }, [batches]);
+
   const generate = async (e) => {
     e.preventDefault();
     if (!canGenerate) { toast.error("AI gen credits exhausted — top up or upgrade"); return; }
     setGenerating(true);
     try {
-      const { data } = await api.post("/image-gen", form);
-      toast.success(`${data.count} image${data.count !== 1 ? "s" : ""} generated — review before using in pipeline`);
+      await api.post("/image-gen", form);
+      toast.success(`Generation started for ${form.quantity} image${form.quantity !== 1 ? "s" : ""}`);
       const { data: newBatches } = await api.get("/image-gen/batches");
       setBatches(newBatches);
       setTab("history");
@@ -353,11 +366,23 @@ export default function ImageGen() {
                     </span>
                     <span className={`ml-2 text-[10px] font-mono uppercase tracking-widest px-2 py-0.5 rounded-full ${
                       batch.status === "approved" ? "bg-emerald-500/10 text-emerald-400"
+                        : batch.status === "failed" ? "bg-red-500/10 text-red-400"
+                        : batch.status === "processing" ? "bg-blue-500/10 text-blue-400"
                         : "bg-amber-500/10 text-amber-400"
                     }`}>{batch.status}</span>
                   </div>
                   <span className="text-xs text-[var(--muted)]">{batch.images?.length || 0} images</span>
                 </div>
+                {batch.status === "processing" && batch.current_step && (
+                  <p className="mb-3 text-xs text-blue-300">{batch.current_step}</p>
+                )}
+                {batch.errors?.length > 0 && (
+                  <div className="mb-3 rounded-xl border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs text-red-300">
+                    {batch.errors.map((error, index) => (
+                      <p key={index}>{error.message || "Image generation failed"}</p>
+                    ))}
+                  </div>
+                )}
                 {batch.images?.length > 0 && (
                   <div>
                     <div className="grid sm:grid-cols-2 gap-4">

@@ -111,7 +111,7 @@ function ListingCard({ listing, index, onUpdate, onApprove, onReject, bulkApprov
               </button>
               <button onClick={() => onApprove(listing)}
                 className="flex items-center gap-1.5 px-3 h-8 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 text-xs font-semibold transition-all"
-                title="Approve & push live">
+                title="Approve for final export">
                 <Check className="w-3.5 h-3.5" /> Approve
               </button>
             </>
@@ -220,6 +220,18 @@ function ListingCard({ listing, index, onUpdate, onApprove, onReject, bulkApprov
           ) : (
             /* Read-only view */
             <>
+              {listing.error && (
+                <div className="flex gap-3 rounded-xl border border-red-500/25 bg-red-500/10 p-4">
+                  <AlertTriangle className="w-5 h-5 text-red-400 shrink-0 mt-0.5" />
+                  <div>
+                    <p className="text-sm font-semibold text-red-300">Processing failed</p>
+                    <p className="text-xs text-red-200/80 mt-1 break-words">{listing.error}</p>
+                    <p className="text-xs text-[var(--muted)] mt-2">
+                      Correct the reported connection or API setting, then start a new pipeline run.
+                    </p>
+                  </div>
+                </div>
+              )}
               {analysis.seo_title && (
                 <div>
                   <p className="text-xs text-[var(--muted)] mb-1">Title</p>
@@ -275,6 +287,7 @@ export default function ReviewQueue() {
   const [listings, setListings] = useState([]);
   const [loading, setLoading] = useState(true);
   const [pushing, setPushing] = useState(false);
+  const [selectedPlatform, setSelectedPlatform] = useState("");
 
   const tier = user?.tier || "free";
   const canBulkApprove = ["pro", "agency", "owner"].includes(tier);
@@ -285,6 +298,7 @@ export default function ReviewQueue() {
       .then(({ data }) => {
         setRun(data);
         setListings(data.results || []);
+        setSelectedPlatform(data.platform || "");
       })
       .catch(() => toast.error("Could not load run"))
       .finally(() => setLoading(false));
@@ -308,22 +322,48 @@ export default function ReviewQueue() {
     toast.success("All listings approved");
   };
 
-  const pushLive = async () => {
+  const finishExport = async () => {
     const approved = listings.filter(l => l.status === "approved");
     if (approved.length === 0) {
-      toast.error("No approved listings to push");
+      toast.error("Approve at least one listing first");
       return;
     }
+    if (!selectedPlatform) {
+      toast.error("Choose a destination platform");
+      return;
+    }
+
+    const destination = PLATFORMS[selectedPlatform];
     setPushing(true);
     try {
+      if (!destination?.api) {
+        const response = await api.post(
+          `/pipeline/runs/${runId}/export/${selectedPlatform}`,
+          { run_id: runId, listings: approved, approve_all: false, platform: selectedPlatform },
+          { responseType: "blob" },
+        );
+        const url = URL.createObjectURL(response.data);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `raven-sharp-${selectedPlatform}-${runId}.csv`;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(url);
+        toast.success(`${destination?.name || selectedPlatform} package downloaded`);
+        return;
+      }
+
       const { data } = await api.post(`/pipeline/runs/${runId}/approve`, {
         run_id: runId,
         listings: approved,
         approve_all: false,
+        platform: selectedPlatform,
       });
-      toast.success(`${data.pushed} listing${data.pushed !== 1 ? "s" : ""} pushed live!`);
-      if (data.failed > 0) toast.error(`${data.failed} failed — check your platform connection`);
-      setTimeout(() => navigate("/dashboard"), 1500);
+      const productDrafts = (data.results || []).reduce((sum, item) => sum + (item.drafts_ready || 0), 0);
+      toast.success(`${productDrafts || data.pushed} mockup-ready draft${(productDrafts || data.pushed) !== 1 ? "s" : ""} created in ${destination.name}`);
+      if (data.failed > 0) toast.error(`${data.failed} artwork batch${data.failed !== 1 ? "es" : ""} produced no mockup-ready drafts`);
+      if (data.pushed > 0) setTimeout(() => navigate("/dashboard"), 1500);
     } catch (err) {
       const _eid = err.response?.data?.error_id;
       toast.error((err.response?.data?.detail || err.response?.data?.error || err.message) + (_eid ? ` (error ${_eid})` : ""));
@@ -345,7 +385,8 @@ export default function ReviewQueue() {
   const rejected  = listings.filter(l => l.status === "rejected").length;
   const pending   = listings.filter(l => !l.status || l.status === "pending_review").length;
   const failed    = listings.filter(l => l.error).length;
-  const platform  = run?.platform;
+  const previousPlatform = run?.platform;
+  const destination = selectedPlatform ? PLATFORMS[selectedPlatform] : null;
 
   return (
     <div className="min-h-screen pt-20 pb-16">
@@ -357,12 +398,10 @@ export default function ReviewQueue() {
           <h1 className="font-display text-4xl sm:text-5xl font-black tracking-tighter mt-1">
             Review & Approve
           </h1>
-          {platform && (
-            <p className="text-[var(--muted)] mt-2">
-              Platform: <span className="text-[var(--raven-glow)] font-semibold">{PLATFORMS[platform]?.name}</span>
-              {" · "}{listings.length} listings generated
-            </p>
-          )}
+          <p className="text-[var(--muted)] mt-2">
+            {listings.length} reusable listings generated. Review them first, then choose where to send or export them.
+            {previousPlatform && <span className="block text-xs mt-1">Older run default: {PLATFORMS[previousPlatform]?.name}</span>}
+          </p>
         </div>
 
         {/* Stats bar */}
@@ -380,32 +419,51 @@ export default function ReviewQueue() {
           ))}
         </div>
 
-        {/* Action bar */}
-        <div className="flex flex-wrap items-center justify-between gap-4 mb-8">
-          <div className="flex gap-3">
-            {canBulkApprove && pending > 0 && (
+        {/* Review and final destination */}
+        <div className="glass rounded-2xl p-5 mb-8">
+          <div className="flex flex-wrap items-center justify-between gap-4 mb-5">
+            <div>
+              <h2 className="font-display text-lg font-bold">1. Approve the listings you want</h2>
+              <p className="text-xs text-[var(--muted)] mt-1">Nothing is sent to a provider during processing or review.</p>
+            </div>
+            {canBulkApprove && pending > 0 ? (
               <button onClick={approveAll}
                 className="flex items-center gap-2 px-4 py-2.5 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 rounded-xl text-sm font-semibold transition-all border border-emerald-500/30">
                 <Check className="w-4 h-4" /> Approve All ({pending})
               </button>
-            )}
-            {!canBulkApprove && (
-              <div className="flex items-center gap-2 text-xs text-[var(--subtle)] px-3 py-2 rounded-lg bg-white/5 border border-white/8">
-                Bulk approve available on Pro+
-              </div>
-            )}
+            ) : !canBulkApprove ? (
+              <div className="text-xs text-[var(--subtle)]">Bulk approve available on Pro+</div>
+            ) : null}
           </div>
 
-          {approved > 0 && (
-            <button
-              onClick={pushLive}
-              disabled={pushing}
-              className="flex items-center gap-2 px-6 py-2.5 bg-[var(--raven)] hover:bg-[var(--raven-glow)] text-white rounded-xl text-sm font-semibold transition-all glow-pulse disabled:opacity-50"
-            >
-              <Send className="w-4 h-4" />
-              {pushing ? "Pushing..." : `Push ${approved} Live`}
-            </button>
-          )}
+          <div className="border-t border-white/10 pt-5">
+            <h2 className="font-display text-lg font-bold">2. Choose the destination</h2>
+            <p className="text-xs text-[var(--muted)] mt-1 mb-4">
+              API destinations create unpublished product drafts and request at least one authentic provider mockup per product. CSV destinations download an upload-ready package.
+            </p>
+            <div className="grid sm:grid-cols-2 gap-3">
+              <select
+                value={selectedPlatform}
+                onChange={e => setSelectedPlatform(e.target.value)}
+                className="bg-[var(--surface)] border border-white/10 rounded-xl px-4 py-3 text-sm text-[var(--text)]"
+              >
+                <option value="">Choose after review...</option>
+                {Object.entries(PLATFORMS).map(([id, item]) => (
+                  <option key={id} value={id}>{item.name} — {item.api ? "connected draft" : "CSV package"}</option>
+                ))}
+              </select>
+              <button
+                onClick={finishExport}
+                disabled={pushing || approved === 0 || !selectedPlatform}
+                className="flex items-center justify-center gap-2 px-6 py-3 bg-[var(--raven)] hover:bg-[var(--raven-glow)] text-white rounded-xl text-sm font-semibold transition-all glow-pulse disabled:opacity-50"
+              >
+                <Send className="w-4 h-4" />
+                {pushing ? "Working..." : destination?.api
+                  ? `Create Drafts + Mockups in ${destination.name}`
+                  : destination ? `Download ${destination.name} Package` : "Choose a destination"}
+              </button>
+            </div>
+          </div>
         </div>
 
         {/* Listings */}
