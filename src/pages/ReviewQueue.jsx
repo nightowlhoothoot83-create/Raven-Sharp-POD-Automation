@@ -220,6 +220,18 @@ function ListingCard({ listing, index, onUpdate, onApprove, onReject, bulkApprov
           ) : (
             /* Read-only view */
             <>
+              {listing.error && (
+                <div className="flex gap-3 rounded-xl border border-red-500/25 bg-red-500/10 p-4">
+                  <AlertTriangle className="w-5 h-5 text-red-400 shrink-0 mt-0.5" />
+                  <div>
+                    <p className="text-sm font-semibold text-red-300">Processing failed</p>
+                    <p className="text-xs text-red-200/80 mt-1 break-words">{listing.error}</p>
+                    <p className="text-xs text-[var(--muted)] mt-2">
+                      Correct the reported connection or API setting, then start a new pipeline run.
+                    </p>
+                  </div>
+                </div>
+              )}
               {analysis.seo_title && (
                 <div>
                   <p className="text-xs text-[var(--muted)] mb-1">Title</p>
