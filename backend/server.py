@@ -811,6 +811,52 @@ def _format_artwork_type_guide() -> str:
     return "\n".join(lines)
 
 
+def prepare_claude_vision_image(image_base64: str, max_edge: int = 1568,
+                                max_bytes: int = 3_500_000) -> tuple[str, str]:
+    """Create a compact analysis-only copy for Claude Vision.
+
+    The full-resolution/upscaled artwork remains untouched for R2, mockups and
+    downloads. This prevents large print-ready PNGs from exceeding Anthropic's
+    request-size limit while retaining enough detail for product and SEO analysis.
+    """
+    try:
+        img = Image.open(io.BytesIO(base64.b64decode(image_base64)))
+        img.thumbnail((max_edge, max_edge), Image.Resampling.LANCZOS)
+
+        # JPEG is substantially smaller than a print-ready PNG. Composite any
+        # transparency over white so transparent artwork analyses correctly.
+        if img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info):
+            rgba = img.convert("RGBA")
+            background = Image.new("RGB", rgba.size, "white")
+            background.paste(rgba, mask=rgba.getchannel("A"))
+            img = background
+        else:
+            img = img.convert("RGB")
+
+        quality = 85
+        while True:
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=quality, optimize=True)
+            payload = buf.getvalue()
+            if len(payload) <= max_bytes:
+                log.info(
+                    "Claude analysis copy prepared: %sx%s, %.2f MB, quality=%s",
+                    img.width, img.height, len(payload) / 1_048_576, quality,
+                )
+                return base64.b64encode(payload).decode(), "image/jpeg"
+            if quality > 55:
+                quality -= 10
+                continue
+            new_size = (max(512, int(img.width * 0.8)),
+                        max(512, int(img.height * 0.8)))
+            if new_size == img.size:
+                raise ValueError("Could not reduce Claude analysis image below size limit")
+            img = img.resize(new_size, Image.Resampling.LANCZOS)
+    except Exception as e:
+        log.warning("Could not prepare compact Claude image; using original: %s", e)
+        return image_base64, "image/jpeg"
+
+
 async def analyse_with_claude(image_base64: str, mime: str, platform: Optional[str],
                                market: str, price_tier: str) -> dict:
     """Claude Vision — analyse image, pick products, write listing copy"""
@@ -875,6 +921,8 @@ Do not assume or require a fulfilment provider; the user chooses that after revi
 Price in AUD for {market} market at {price_tier} pricing.
 {tag_guidance}"""
 
+    analysis_image_base64, analysis_mime = prepare_claude_vision_image(image_base64)
+
     async with httpx.AsyncClient(timeout=60) as client_http:
         res = await client_http.post(
             "https://api.anthropic.com/v1/messages",
@@ -885,8 +933,8 @@ Price in AUD for {market} market at {price_tier} pricing.
                   "max_tokens": 2000,
                   "messages": [{"role": "user", "content": [
                       {"type": "image", "source": {
-                          "type": "base64", "media_type": mime,
-                          "data": image_base64}},
+                          "type": "base64", "media_type": analysis_mime,
+                          "data": analysis_image_base64}},
                       {"type": "text", "text": prompt}]}]})
 
     if res.status_code != 200:
