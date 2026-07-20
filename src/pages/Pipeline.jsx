@@ -3,7 +3,7 @@ import { useNavigate, useParams, Link } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import api from "../lib/api";
 import ADGFooter from "../components/ADGFooter";
-import { Upload, X, Play, ChevronRight, Globe, Zap, AlertCircle, Info, Clock, RefreshCw, CheckCircle2 } from "lucide-react";
+import { Upload, X, Play, ChevronRight, Globe, Zap, AlertCircle, Info, Clock, RefreshCw, CheckCircle2, Lock } from "lucide-react";
 import { toast } from "sonner";
 
 const MARKETS = [
@@ -558,7 +558,7 @@ export default function Pipeline() {
                 <ol className="space-y-1 list-decimal list-inside">
                   <li>Each image is AI-upscaled and DPI-corrected for print</li>
                   <li>Claude Vision analyses your artwork for themes, colours and style</li>
-                  <li>Platform-specific listings are generated — titles, descriptions, tags and {platformProducts.length} product variants</li>
+                  <li>Reusable listings are generated — titles, descriptions, tags and recommended product ideas</li>
                   <li>Everything lands in your <strong className="text-[var(--text)]">review queue</strong> — nothing is published until you approve it</li>
                 </ol>
                 <p className="mt-3 text-[var(--subtle)]">
