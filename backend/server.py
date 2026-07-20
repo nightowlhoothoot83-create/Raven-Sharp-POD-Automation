@@ -930,7 +930,9 @@ Price in AUD for {market} market at {price_tier} pricing.
                      "anthropic-version": "2023-06-01",
                      "content-type": "application/json"},
             json={"model": "claude-sonnet-5",
-                  "max_tokens": 2000,
+                  # Product strategy can legitimately exceed 2,000 tokens (4-8 products,
+                  # listing copy, tags and reasoning). A low cap truncates valid JSON mid-string.
+                  "max_tokens": 6000,
                   "messages": [{"role": "user", "content": [
                       {"type": "image", "source": {
                           "type": "base64", "media_type": analysis_mime,
