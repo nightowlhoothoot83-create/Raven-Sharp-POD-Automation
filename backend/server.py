@@ -773,7 +773,7 @@ async def upload_to_r2(image_base64: str, filename: str, mime: str = "image/png"
             io.BytesIO(image_bytes),
             R2_BUCKET,
             key,
-            ExtraArgs={"ContentType": mime, "ACL": "public-read"},
+            ExtraArgs={"ContentType": mime},
         )
 
         public_base = os.environ.get("R2_PUBLIC_URL", f"{R2_ENDPOINT}/{R2_BUCKET}")
