@@ -12,7 +12,7 @@ from typing import Optional, List, Dict, Any
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from dotenv import load_dotenv
-import os, uuid, json, logging, httpx, base64, bcrypt, jwt, asyncio, hmac, hashlib, io
+import os, uuid, json, logging, httpx, base64, bcrypt, jwt, asyncio, hmac, hashlib, io, re
 from PIL import Image
 from platforms import (push_printify_full, push_gelato_full, push_printful_full,
     push_etsy_draft, etsy_auth_url, etsy_exchange_token,
