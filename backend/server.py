@@ -1041,16 +1041,17 @@ async def _process_one_pipeline_image(run_id, idx, total, img_data, platform, ma
             "status": "pending_review",
             "platform": platform,
             "edited": False,
-            "checkpoint": {"bg_removed_b64": bg_removed_b64, "upscaled_b64": upscaled_b64,
-                          "public_url": public_url, "seo_name": seo_name},
+            # Never persist full image base64 in MongoDB (16 MB document limit).
+            # The image itself lives in R2; Mongo stores only its URL and metadata.
+            "checkpoint": {"public_url": public_url, "seo_name": seo_name},
         }
     except Exception as e:
         log.error(f"[{run_id}] Pipeline error for {name}: {e}")
         # Preserve whatever succeeded so a retry can resume instead of restart
         # and re-pay for API calls that already completed.
         preserved = {}
-        if bg_removed_b64: preserved["bg_removed_b64"] = bg_removed_b64
-        if upscaled_b64: preserved["upscaled_b64"] = upscaled_b64
+        # Large base64 checkpoints can exceed MongoDB's 16 MB document limit.
+        # The retry endpoint accepts the source image again when no R2 URL exists.
         if public_url: preserved["public_url"] = public_url
         if seo_name: preserved["seo_name"] = seo_name
         return {
