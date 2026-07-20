@@ -461,7 +461,7 @@ export default function Pipeline() {
                 </span>
                 <button
                   onClick={() => setStep(2)}
-                  className="flex items-center gap-2 px-6 py-2.5 bg-[var(--raven)] hover:bg-[var(--raven-glow)] text-white rounded-xl text-sm font-semibold transition-all"
+                  className="flex items-center gap-2 px-6 py-2.5 bg-gradient-to-r from-[var(--raven)] to-[var(--raven-blue)] hover:brightness-110 shadow-[0_4px_16px_rgba(124,92,191,0.35)] hover:shadow-[0_6px_24px_rgba(124,92,191,0.5)] text-white rounded-xl text-sm font-semibold transition-all"
                 >
                   Continue to settings <ChevronRight className="w-4 h-4" />
                 </button>
@@ -570,7 +570,7 @@ export default function Pipeline() {
             <button
               onClick={runPipeline}
               disabled={running}
-              className="w-full sm:w-auto flex items-center justify-center gap-2 px-10 h-14 bg-[var(--raven)] hover:bg-[var(--raven-glow)] text-white rounded-xl text-base font-semibold transition-all glow-pulse disabled:opacity-50"
+              className="w-full sm:w-auto flex items-center justify-center gap-2 px-10 h-14 bg-gradient-to-r from-[var(--raven)] to-[var(--raven-blue)] hover:brightness-110 shadow-[0_4px_16px_rgba(124,92,191,0.35)] hover:shadow-[0_6px_24px_rgba(124,92,191,0.5)] text-white rounded-xl text-base font-semibold transition-all glow-pulse disabled:opacity-50"
             >
               <Play className="w-5 h-5" />
               Run Pipeline ({images.length} image{images.length !== 1 ? "s" : ""})
@@ -647,7 +647,7 @@ export default function Pipeline() {
                         Save &amp; Continue Later
                       </button>
                       <button onClick={continueToNext}
-                        className="flex items-center gap-2 px-6 py-2.5 bg-[var(--raven)] hover:bg-[var(--raven-glow)] text-white rounded-xl text-sm font-semibold transition-all">
+                        className="flex items-center gap-2 px-6 py-2.5 bg-gradient-to-r from-[var(--raven)] to-[var(--raven-blue)] hover:brightness-110 shadow-[0_4px_16px_rgba(124,92,191,0.35)] hover:shadow-[0_6px_24px_rgba(124,92,191,0.5)] text-white rounded-xl text-sm font-semibold transition-all">
                         Looks good — Continue <ChevronRight className="w-4 h-4" />
                       </button>
                     </div>

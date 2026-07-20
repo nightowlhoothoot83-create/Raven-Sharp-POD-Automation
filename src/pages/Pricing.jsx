@@ -184,7 +184,7 @@ export default function Pricing() {
                   user?.tier === tier.id
                     ? "bg-white/5 text-[var(--muted)] cursor-default"
                     : tier.featured
-                      ? "bg-[var(--raven)] hover:bg-[var(--raven-glow)] text-white"
+                      ? "bg-gradient-to-r from-[var(--raven)] to-[var(--raven-blue)] hover:brightness-110 shadow-[0_4px_16px_rgba(124,92,191,0.35)] hover:shadow-[0_6px_24px_rgba(124,92,191,0.5)] text-white"
                       : "bg-white/10 hover:bg-white/15 text-white"
                 }`}>
                 {loading === tier.id ? "Loading..." : user?.tier === tier.id ? "Current Plan" : tier.cta}

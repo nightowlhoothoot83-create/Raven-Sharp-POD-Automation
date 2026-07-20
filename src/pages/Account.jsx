@@ -209,7 +209,7 @@ function PlatformRow({
             <button
               onClick={connectOAuth}
               disabled={connecting}
-              className="flex items-center gap-2 px-5 py-2.5 bg-[var(--raven)] hover:bg-[var(--raven-glow)] text-white rounded-xl text-sm font-semibold transition-all disabled:opacity-50"
+              className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-[var(--raven)] to-[var(--raven-blue)] hover:brightness-110 shadow-[0_4px_16px_rgba(124,92,191,0.35)] hover:shadow-[0_6px_24px_rgba(124,92,191,0.5)] text-white rounded-xl text-sm font-semibold transition-all disabled:opacity-50"
             >
               <LinkIcon className="w-4 h-4" />
               {connecting ? "Opening..." : connected ? `Reconnect ${plat.name}` : `Connect ${plat.name}`}
@@ -278,7 +278,7 @@ function PlatformRow({
             <button
               onClick={save}
               disabled={saving || !key.trim()}
-              className="flex items-center gap-2 px-5 py-2.5 bg-[var(--raven)] hover:bg-[var(--raven-glow)] text-white rounded-xl text-sm font-semibold transition-all disabled:opacity-50"
+              className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-[var(--raven)] to-[var(--raven-blue)] hover:brightness-110 shadow-[0_4px_16px_rgba(124,92,191,0.35)] hover:shadow-[0_6px_24px_rgba(124,92,191,0.5)] text-white rounded-xl text-sm font-semibold transition-all disabled:opacity-50"
             >
               <Check className="w-4 h-4" />
               {saving ? "Saving..." : connected ? "Update Connection" : "Save Connection"}

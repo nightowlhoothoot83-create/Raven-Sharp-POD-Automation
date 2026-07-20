@@ -86,7 +86,7 @@ export default function Dashboard() {
             </h1>
           </div>
           <Link to="/pipeline"
-            className="flex items-center gap-2 px-6 py-3 bg-[var(--raven)] hover:bg-[var(--raven-glow)] text-white rounded-xl text-sm font-semibold transition-all glow-pulse self-start">
+            className="flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-[var(--raven)] to-[var(--raven-blue)] hover:brightness-110 shadow-[0_4px_16px_rgba(124,92,191,0.35)] hover:shadow-[0_6px_24px_rgba(124,92,191,0.5)] text-white rounded-xl text-sm font-semibold transition-all glow-pulse self-start">
             <Plus className="w-4 h-4" /> New Pipeline Run
           </Link>
         </div>
@@ -141,7 +141,7 @@ export default function Dashboard() {
               <Zap className="w-10 h-10 text-[var(--raven)]/40 mx-auto mb-3" />
               <p className="text-[var(--muted)] mb-4">No pipeline runs yet.</p>
               <Link to="/pipeline"
-                className="inline-flex items-center gap-2 px-5 py-2.5 bg-[var(--raven)] hover:bg-[var(--raven-glow)] text-white rounded-xl text-sm font-semibold transition-all">
+                className="inline-flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-[var(--raven)] to-[var(--raven-blue)] hover:brightness-110 shadow-[0_4px_16px_rgba(124,92,191,0.35)] hover:shadow-[0_6px_24px_rgba(124,92,191,0.5)] text-white rounded-xl text-sm font-semibold transition-all">
                 <Plus className="w-4 h-4" /> Start your first run
               </Link>
             </div>

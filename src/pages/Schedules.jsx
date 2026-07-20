@@ -68,7 +68,7 @@ export default function Schedules() {
         <Calendar className="w-16 h-16 text-[var(--raven)]/40 mx-auto mb-6" />
         <h1 className="font-display text-3xl font-bold mb-3">Scheduling requires Creator+</h1>
         <p className="text-[var(--muted)] mb-6">Automated scheduling is available on Creator tier and above. Creator unlocks image generation scheduling; Pro and above unlock full pipeline scheduling.</p>
-        <Link to="/pricing" className="inline-flex items-center gap-2 px-6 py-3 bg-[var(--raven)] hover:bg-[var(--raven-glow)] text-white rounded-xl font-semibold text-sm transition-all">
+        <Link to="/pricing" className="inline-flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-[var(--raven)] to-[var(--raven-blue)] hover:brightness-110 shadow-[0_4px_16px_rgba(124,92,191,0.35)] hover:shadow-[0_6px_24px_rgba(124,92,191,0.5)] text-white rounded-xl font-semibold text-sm transition-all">
           <Zap className="w-4 h-4" /> View Plans
         </Link>
       </div>
@@ -88,7 +88,7 @@ export default function Schedules() {
             </p>
           </div>
           <button onClick={() => setCreating(true)}
-            className="flex items-center gap-2 px-5 py-2.5 bg-[var(--raven)] hover:bg-[var(--raven-glow)] text-white rounded-xl text-sm font-semibold transition-all">
+            className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-[var(--raven)] to-[var(--raven-blue)] hover:brightness-110 shadow-[0_4px_16px_rgba(124,92,191,0.35)] hover:shadow-[0_6px_24px_rgba(124,92,191,0.5)] text-white rounded-xl text-sm font-semibold transition-all">
             <Plus className="w-4 h-4" /> New Schedule
           </button>
         </div>
@@ -182,7 +182,7 @@ export default function Schedules() {
 
               <div className="flex gap-3 pt-2">
                 <button type="submit"
-                  className="flex items-center gap-2 px-6 py-2.5 bg-[var(--raven)] hover:bg-[var(--raven-glow)] text-white rounded-xl text-sm font-semibold transition-all">
+                  className="flex items-center gap-2 px-6 py-2.5 bg-gradient-to-r from-[var(--raven)] to-[var(--raven-blue)] hover:brightness-110 shadow-[0_4px_16px_rgba(124,92,191,0.35)] hover:shadow-[0_6px_24px_rgba(124,92,191,0.5)] text-white rounded-xl text-sm font-semibold transition-all">
                   <Calendar className="w-4 h-4" /> Create Schedule
                 </button>
                 <button type="button" onClick={() => setCreating(false)}
