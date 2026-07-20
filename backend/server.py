@@ -940,7 +940,21 @@ Price in AUD for {market} market at {price_tier} pricing.
     if res.status_code != 200:
         raise HTTPException(500, f"Claude API error: {res.text}")
 
-    content = res.json()["content"][0]["text"].strip()
+    response_data = res.json()
+    # Claude may return non-text blocks before the answer (for example
+    # thinking/redacted-thinking blocks). Collect only actual text blocks
+    # instead of assuming content[0] always contains a "text" key.
+    content = "".join(
+        block.get("text", "")
+        for block in response_data.get("content", [])
+        if block.get("type") == "text"
+    ).strip()
+    if not content:
+        block_types = [block.get("type", "unknown") for block in response_data.get("content", [])]
+        raise HTTPException(
+            500,
+            f"Claude returned no text response (blocks: {', '.join(block_types) or 'none'})",
+        )
     # Strip markdown code fences if present
     if content.startswith("```"):
         content = content.split("```")[1]
