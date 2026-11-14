@@ -89,8 +89,8 @@ _provider_cache: dict = {}
 
 async def get_best_provider_for_blueprint(blueprint_id: int, api_key: str) -> Optional[dict]:
     """Scores every print provider available for a blueprint and picks the
-    best one — same scoring formula as the original tool: prefer known
-    global providers, more variant coverage, lower base cost."""
+    best catalog candidate by known provider and variant coverage. Catalog
+    variants have no costs; actual production prices come from the draft product."""
     if blueprint_id in _provider_cache:
         return _provider_cache[blueprint_id]
 
@@ -117,13 +117,16 @@ async def get_best_provider_for_blueprint(blueprint_id: int, api_key: str) -> Op
                     variants = v_res.json().get("variants", [])
                     if not variants:
                         continue
-                    base_cost_usd = (variants[0].get("cost", 0) or 0) / 100
+                    # Catalog variants do not expose cost. Do not mistake missing
+                    # costs for zero or reject every documented catalog response.
+                    selected = variants[:12]
                     is_global = any(g in (prov.get("title") or "") for g in global_providers)
                     scored.append({
                         "id": prov["id"], "title": prov.get("title", "Unknown Provider"),
-                        "base_cost_usd": base_cost_usd, "variant_count": len(variants),
-                        "variants": variants[:12], "is_global": is_global,
-                        "score": (20 if is_global else 0) + len(variants) - (base_cost_usd * 2),
+                        "variant_count": len(variants), "variants": selected,
+                        "is_global": is_global,
+                        "score": (20 if is_global else 0) + len(variants),
+                        "selection_basis": "catalog_provider_and_variant_coverage_not_cost",
                     })
                 except Exception:
                     continue
@@ -138,9 +141,9 @@ async def get_best_provider_for_blueprint(blueprint_id: int, api_key: str) -> Op
 
 
 def calc_smart_retail(base_cost_usd: float, tier: str = "mid") -> float:
-    """Same formula as the original tool: buffer for worst-case international
-    shipping, enforce a minimum 55% margin, round to .99, then apply the
-    price-tier multiplier and round again."""
+    """Retail heuristic using production cost plus a 30% buffer and tier.
+    This is not a destination shipping quote or a verified net margin.
+    """
     buffered_cost = base_cost_usd * 1.3
     min_retail = buffered_cost / (1 - 0.55)
     import math
@@ -222,14 +225,16 @@ async def push_printify_full(listing: dict, analysis: dict, image_url: str,
                                "reason": "Provider returned no usable variants."})
                 continue
 
-            base_cost_usd = best_provider["base_cost_usd"]
-            retail_price = calc_smart_retail(base_cost_usd, price_tier)
+            # A product response, unlike the catalog, includes read-only costs.
+            # Use an explicitly provisional price only on the unpublished draft;
+            # never report it as the selected retail or a verified margin.
+            provisional_cents = 10000
             payload = {
                 "title": analysis.get("seo_title", blueprint_key.replace("_", " ").title()),
                 "description": analysis.get("description", ""),
                 "blueprint_id": blueprint["id"],
                 "print_provider_id": provider_id,
-                "variants": [{"id": vid, "price": int(retail_price * 100),
+                "variants": [{"id": vid, "price": provisional_cents,
                               "is_enabled": True} for vid in variant_ids],
                 "print_areas": [{
                     "variant_ids": variant_ids,
@@ -270,19 +275,43 @@ async def push_printify_full(listing: dict, analysis: dict, image_url: str,
                     mockup_url = next((m.get("src") for m in product.get("images", [])
                                        if m.get("src")), None)
 
-            status = "draft_ready" if mockup_url else "mockup_required"
+            costs = {v.get("id"): v.get("cost") for v in product.get("variants", [])}
+            known_costs = all(type(costs.get(vid)) is int and costs[vid] > 0
+                              for vid in variant_ids)
+            base_cost_usd = max(costs[vid] for vid in variant_ids) / 100 if known_costs else None
+            retail_price = calc_smart_retail(base_cost_usd, price_tier) if known_costs else None
+            pricing_verified = False
+            if retail_price is not None:
+                update_res = await c.put(
+                    f"https://api.printify.com/v1/shops/{shop_id}/products/{product_id}.json",
+                    headers=headers,
+                    json={"variants": [{"id": vid, "price": round(retail_price * 100),
+                                        "is_enabled": True} for vid in variant_ids]},
+                )
+                pricing_verified = update_res.status_code == 200
+            status = ("pricing_required" if not pricing_verified else
+                      "draft_ready" if mockup_url else "mockup_required")
             drafts.append({
                 "product": blueprint_key,
                 "printify_id": product_id,
                 "status": status,
                 "mockup_url": mockup_url,
                 "mockups": [m.get("src") for m in product.get("images", []) if m.get("src")],
-                "note": "Unpublished Printify product",
+                "note": ("Unpublished Printify product" if pricing_verified else
+                         "Unpublished product; provisional 100.00 price requires replacement before launch"),
                 "provider": best_provider["title"],
-                "base_cost_usd": round(base_cost_usd, 2),
-                "retail_price": retail_price,
+                "base_cost_usd": round(base_cost_usd, 2) if base_cost_usd is not None else None,
+                "retail_price": retail_price if pricing_verified else None,
+                "pricing_verified": pricing_verified,
+                "provider_selection_basis": best_provider["selection_basis"],
                 "margin_pct": round(((retail_price - base_cost_usd) / retail_price) * 100)
-                              if retail_price else None,
+                              if pricing_verified else None,
+                "margin_basis": "production_only_excludes_shipping_tax_fees_refunds",
+                "net_margin_verified": False,
+                "net_contribution": None,
+                "launch_blockers": ["destination_shipping_quote", "fees_and_taxes",
+                                    "fulfilment_spending_limit", "print_safe_visual_review"] +
+                                   ([] if pricing_verified else ["provider_product_cost_and_retail_price"]),
                 "url": f"https://printify.com/app/store/{shop_id}/products/{product_id}",
             })
 

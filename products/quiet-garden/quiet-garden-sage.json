@@ -1,0 +1,31 @@
+{
+  "title": "Quiet Garden Sage geometric botanical art print",
+  "description": "Original geometric botanical composition. Intended artwork size 8 x 10 inches. Physical paper, finish, provider, shipping, price and mockup must be confirmed before publication.",
+  "keyword_status": "candidate only; demand and conversion not verified",
+  "print_spec": {
+    "width_inches": 8,
+    "height_inches": 10,
+    "dpi": 300
+  },
+  "inspection": {
+    "sha256": "10abf9b4038635c710af6063457a92380c1ce7084e93089a409daa572450904f",
+    "width": 2400,
+    "height": 3000,
+    "effective_dpi": 300.0,
+    "print_safe": true,
+    "reasons": []
+  },
+  "preview_type": "flat artwork preview; not a provider mockup",
+  "status": "offline_artwork_only",
+  "provider_draft_id": null,
+  "price": null,
+  "rights": "Original deterministic shapes authored for this project; no third-party art or fonts.",
+  "launch_blockers": [
+    "visual_review",
+    "provider_connection",
+    "catalog_size_match",
+    "authentic_mockup",
+    "destination_quote",
+    "verified_checkout_and_tracking"
+  ]
+}

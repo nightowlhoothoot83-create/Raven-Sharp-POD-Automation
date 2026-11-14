@@ -58,3 +58,6 @@ jobs:
       env:
         MONGO_URL: "mongodb://localhost:27017/ci_dummy"
       run: python -c "import server; print('server.py imports cleanly')"
+
+    - name: Offline POD readiness regression checks
+      run: python -m unittest discover -s backend -p 'test_readiness.py' -v
