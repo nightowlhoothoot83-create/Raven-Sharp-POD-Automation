@@ -14,7 +14,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 import os, uuid, json, logging, httpx, base64, bcrypt, jwt, asyncio, hmac, hashlib, io, re
 from PIL import Image
-from readiness import draft_preflight
+from readiness import draft_preflight, artwork_is_blank
 from platforms import (push_printify_full, push_gelato_full, push_printful_full,
     push_etsy_draft, etsy_auth_url, etsy_exchange_token,
     generate_redbubble_package, generate_teepublic_package,
@@ -1136,10 +1136,9 @@ async def _process_one_pipeline_image(run_id, idx, total, img_data, platform, ma
         import hashlib
         artwork_bytes = base64.b64decode(upscaled_b64)
         with Image.open(io.BytesIO(artwork_bytes)) as artwork:
-            rgb = artwork.convert("RGB")
             artwork_metadata = {"sha256": hashlib.sha256(artwork_bytes).hexdigest(),
                                 "width": artwork.width, "height": artwork.height,
-                                "blank": all(lo == hi for lo, hi in rgb.getextrema())}
+                                "blank": artwork_is_blank(artwork)}
 
         if public_url and checkpoint.get("artwork_metadata", {}).get("sha256") == artwork_metadata["sha256"]:
             log.info(f"[{run_id}] {name}: reusing already-uploaded R2 url (checkpoint)")

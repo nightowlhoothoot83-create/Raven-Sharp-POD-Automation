@@ -1,3 +1,5 @@
+import io
+import json
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -7,8 +9,8 @@ import ast
 from types import SimpleNamespace
 from datetime import datetime, timezone
 from pathlib import Path
-from PIL import Image
-from readiness import inspect_artwork, inspect_artwork_bytes, draft_preflight, final_readiness, quote_margin, VISUAL_CHECKS
+from PIL import Image, ImageDraw
+from readiness import inspect_artwork, inspect_artwork_bytes, draft_preflight, final_readiness, quote_margin, VISUAL_CHECKS, artwork_is_blank
 
 class ReadinessTests(unittest.TestCase):
     def test_invalid_physical_dimensions(self):
@@ -41,6 +43,22 @@ class ReadinessTests(unittest.TestCase):
             self.assertIn('fully_transparent_artwork', checks['reasons'])
             self.assertIn('aspect_ratio_would_crop_or_distort', checks['reasons'])
 
+    def test_alpha_only_artwork_is_not_blank(self):
+        for colour in ("black", "white"):
+            for mode in ("RGBA", "P"):
+                with self.subTest(colour=colour, mode=mode):
+                    image = Image.new("RGBA", (300, 300), (0, 0, 0, 0))
+                    ImageDraw.Draw(image).rectangle((80, 80, 220, 220), fill=colour)
+                    if mode == "P":
+                        image = image.convert("P")
+                    data = io.BytesIO()
+                    image.save(data, format="PNG")
+                    with Image.open(io.BytesIO(data.getvalue())) as decoded:
+                        self.assertFalse(artwork_is_blank(decoded))
+                    self.assertTrue(inspect_artwork_bytes(data.getvalue(), 1, 1)["print_safe"])
+        for colour in ((0, 0, 0, 0), "white", "black"):
+            self.assertTrue(artwork_is_blank(Image.new("RGBA", (8, 8), colour)))
+
     def test_requires_exact_visual_review_and_mockup(self):
         inspection = {'sha256':'original', 'reasons':[]}
         review = dict.fromkeys(VISUAL_CHECKS, True)
@@ -62,21 +80,68 @@ class ReadinessTests(unittest.TestCase):
                 refund_reserve=0, currency='USD', quote_date='2026-11-14')
 
 class ProviderPricingTests(unittest.IsolatedAsyncioTestCase):
-    async def test_unknown_cost_not_zero_and_worst_variant_priced(self):
+    async def test_documented_catalog_does_not_require_product_costs(self):
         def handle(request):
             if str(request.url).endswith('print_providers.json'):
                 return httpx.Response(200, json=[{'id': 1, 'title': 'Provider'}])
             return httpx.Response(200, json={'variants': [
-                {'id': 1}, {'id': 2, 'cost': 0}, {'id': 3, 'cost': 1000},
-                {'id': 4, 'cost': 1800}]})
+                {'id': 1, 'title': 'Black / S', 'options': {'color': 'Black'},
+                 'placeholders': [{'position': 'front', 'height': 4500, 'width': 4500}]}]})
         original = httpx.AsyncClient
         def client(**kwargs):
             return original(transport=httpx.MockTransport(handle))
         platforms._provider_cache.clear()
         with patch.object(platforms.httpx, 'AsyncClient', client):
             provider = await platforms.get_best_provider_for_blueprint(6, 'offline')
-        self.assertEqual(provider['base_cost_usd'], 18)
-        self.assertEqual([v['id'] for v in provider['variants']], [3, 4])
+        self.assertEqual([v['id'] for v in provider['variants']], [1])
+        self.assertNotIn('base_cost_usd', provider)
+
+    async def test_draft_uses_product_costs_and_never_publishes(self):
+        for costs, update_status in (([1000, 1800], 200), ([1000, None], 200),
+                                     ([1000, 0], 200), ([1000, True], 200),
+                                     ([1000, 1800], 422)):
+            with self.subTest(costs=costs, update_status=update_status):
+                requests = []
+                def handle(request):
+                    requests.append(request)
+                    url = str(request.url)
+                    if url.endswith('/uploads/images.json'):
+                        return httpx.Response(200, json={'id': 'image'})
+                    if url.endswith('print_providers.json'):
+                        return httpx.Response(200, json=[{'id': 1, 'title': 'Provider'}])
+                    if url.endswith('/variants.json'):
+                        # Real catalog schema: no cost property.
+                        return httpx.Response(200, json={'variants': [{'id': 1}, {'id': 2}]})
+                    if request.method == 'POST' and url.endswith('/products.json'):
+                        return httpx.Response(200, json={'id': 'draft',
+                            'variants': [{'id': i, 'cost': c} for i, c in enumerate(costs, 1)],
+                            'images': [{'src': 'https://images.printify.com/mockup.png'}]})
+                    if request.method == 'PUT' and url.endswith('/products/draft.json'):
+                        return httpx.Response(update_status, json={})
+                    self.fail(f'Unexpected provider call: {request.method} {url}')
+                original = httpx.AsyncClient
+                def client(**kwargs):
+                    return original(transport=httpx.MockTransport(handle))
+                platforms._provider_cache.clear()
+                with patch.object(platforms.httpx, 'AsyncClient', client):
+                    result = await platforms.push_printify_full({},
+                        {'recommended_products': [{'product': 't_shirt'}]},
+                        'https://stored/art.png', 'offline', 'shop')
+                draft = result['published'][0]
+                priced = costs == [1000, 1800] and update_status == 200
+                self.assertEqual(draft['status'], 'draft_ready' if priced else 'pricing_required')
+                self.assertEqual(draft['pricing_verified'], priced)
+                self.assertEqual(draft['retail_price'], platforms.calc_smart_retail(18) if priced else None)
+                self.assertEqual(result['drafts_ready'], int(priced))
+                self.assertFalse(draft['net_margin_verified'])
+                self.assertFalse(any('publish' in str(r.url) or '/orders' in str(r.url) for r in requests))
+                if priced:
+                    update = next(r for r in requests if r.method == 'PUT')
+                    prices = [v['price'] for v in json.loads(update.content)['variants']]
+                    self.assertEqual(prices, [round(platforms.calc_smart_retail(18) * 100)] * 2)
+                else:
+                    self.assertIn('provider_product_cost_and_retail_price', draft['launch_blockers'])
+
 
 class DraftRouteTests(unittest.IsolatedAsyncioTestCase):
     async def test_server_record_blocks_spoofed_pixels_before_provider_call(self):

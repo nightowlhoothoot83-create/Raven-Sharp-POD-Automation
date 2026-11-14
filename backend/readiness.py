@@ -10,6 +10,17 @@ VISUAL_CHECKS = ("prompt_match", "composition", "no_crop", "no_artefacts",
                  "text_correct", "no_watermark", "clean_edges", "contrast",
                  "background_suitable", "product_fit", "original_rights")
 
+def artwork_is_blank(image):
+    """Ignore hidden RGB pixels; preserve artwork expressed through alpha.
+
+    Check both light and dark print surfaces so transparent white or black
+    lettering remains valid, while uniform and fully transparent files block.
+    """
+    rgba = image.convert("RGBA")
+    return all(all(lo == hi for lo, hi in Image.alpha_composite(
+        Image.new("RGBA", rgba.size, background), rgba).convert("RGB").getextrema())
+        for background in ("white", "black"))
+
 def inspect_artwork(path, width_inches, height_inches, dpi=300):
     return inspect_artwork_bytes(Path(path).read_bytes(), width_inches, height_inches, dpi)
 
@@ -27,9 +38,9 @@ def inspect_artwork_bytes(data, width_inches, height_inches, dpi=300):
             reasons.append("insufficient_actual_pixels")
         if abs(width / height / (width_inches / height_inches) - 1) > .01:
             reasons.append("aspect_ratio_would_crop_or_distort")
-        if image.convert("RGB").getextrema() == ((255, 255),) * 3:
-            reasons.append("blank_white_artwork")
-        if image.mode == "RGBA" and image.getchannel("A").getextrema()[1] == 0:
+        if artwork_is_blank(image):
+            reasons.append("blank_artwork")
+        if image.convert("RGBA").getchannel("A").getextrema()[1] == 0:
             reasons.append("fully_transparent_artwork")
     return {"sha256": hashlib.sha256(data).hexdigest(), "width": width,
             "height": height, "effective_dpi": min(width/width_inches, height/height_inches),
