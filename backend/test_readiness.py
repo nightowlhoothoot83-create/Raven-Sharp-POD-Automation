@@ -3,6 +3,9 @@ import unittest
 from unittest.mock import patch
 import httpx
 import platforms
+import ast
+from types import SimpleNamespace
+from datetime import datetime, timezone
 from pathlib import Path
 from PIL import Image
 from readiness import inspect_artwork, inspect_artwork_bytes, draft_preflight, final_readiness, quote_margin, VISUAL_CHECKS
@@ -74,6 +77,47 @@ class ProviderPricingTests(unittest.IsolatedAsyncioTestCase):
             provider = await platforms.get_best_provider_for_blueprint(6, 'offline')
         self.assertEqual(provider['base_cost_usd'], 18)
         self.assertEqual([v['id'] for v in provider['variants']], [3, 4])
+
+class DraftRouteTests(unittest.IsolatedAsyncioTestCase):
+    async def test_server_record_blocks_spoofed_pixels_before_provider_call(self):
+        # Execute the actual route body with fake persistence/provider; no app,
+        # credential, database or network startup is needed for this regression.
+        source = ast.parse(Path(__file__).with_name('server.py').read_text())
+        route = next(n for n in source.body if isinstance(n, ast.AsyncFunctionDef)
+                     and n.name == 'approve_listings')
+        route.decorator_list = []
+        route.returns = None
+        for arg in route.args.args:
+            arg.annotation = None
+        route.args.defaults = []
+        saved = {'results': [{'id': 'one', 'public_url': 'https://stored/art.png',
+                  'artwork_metadata': {'sha256':'server', 'width':2400, 'height':3000}}]}
+        calls, updates = [], []
+        class Collection:
+            async def find_one(self, *args): return saved
+            async def update_one(self, *args): updates.append(args)
+        async def push(listing, platform, user):
+            calls.append(listing)
+            return {'drafts_ready':1}
+        scope = {'TIERS': {'free':{}}, 'db':SimpleNamespace(pipeline_runs=Collection()),
+                 'draft_preflight':draft_preflight, 'push_to_platform':push,
+                 'datetime':datetime, 'timezone':timezone}
+        exec(compile(ast.Module(body=[route], type_ignores=[]), 'actual-route', 'exec'), scope)
+        review = {**dict.fromkeys(VISUAL_CHECKS, True), 'sha256':'spoof'}
+        listing = {'id':'one', 'public_url':'https://spoof/art.png',
+                   'artwork_metadata': {'sha256':'spoof', 'width':99999, 'height':99999},
+                   'print_spec':{'width_inches':8,'height_inches':10,'dpi':300},
+                   'visual_review':review}
+        payload = SimpleNamespace(approve_all=False, listings=[listing], platform='printify')
+        result = await scope['approve_listings']('run', payload, {'id':'user'})
+        self.assertEqual(result['pushed'], 0)
+        self.assertEqual(calls, [])
+        self.assertEqual(updates[-1][1]['$set']['status'], 'blocked')
+        review['sha256'] = 'server'
+        result = await scope['approve_listings']('run', payload, {'id':'user'})
+        self.assertEqual(result['pushed'], 1)
+        self.assertEqual(calls[0]['public_url'], 'https://stored/art.png')
+        self.assertEqual(updates[-1][1]['$set']['status'], 'completed')
 
 if __name__ == '__main__': unittest.main()
 
