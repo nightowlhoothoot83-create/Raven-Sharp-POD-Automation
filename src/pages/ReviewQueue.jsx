@@ -10,6 +10,8 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
+const VISUAL_CHECKS = ["prompt_match", "composition", "no_crop", "no_artefacts", "text_correct", "no_watermark", "clean_edges", "contrast", "background_suitable", "product_fit", "original_rights"];
+
 function TagEditor({ tags, onChange }) {
   const [input, setInput] = useState("");
   const addTag = (e) => {
@@ -135,6 +137,28 @@ function ListingCard({ listing, index, onUpdate, onApprove, onReject, bulkApprov
       {/* Expanded detail / edit */}
       {expanded && (
         <div className="border-t border-white/8 p-5 space-y-5">
+          <fieldset className="space-y-3">
+            <legend className="font-semibold text-sm">Print preflight</legend>
+            <p className="text-xs text-[var(--muted)]">Enter the intended print area from the provider's template. Check the full artwork for correct text, clean edges, contrast, cropping, background, product fit and rights before confirming. A provider mockup is checked after draft creation.</p>
+            {!listing.artwork_metadata?.sha256 && <p className="text-xs text-amber-400">This older run has no measured artwork record. Run the artwork through the pipeline again before creating provider drafts.</p>}
+            <div className="flex flex-wrap gap-3">
+              {[['width_inches', 'Width (inches)'], ['height_inches', 'Height (inches)'], ['dpi', 'Required DPI']].map(([key, label]) => (
+                <label key={key} className="text-xs">{label}
+                  <input type="number" min="0.01" step="any" aria-label={label}
+                    className="block bg-white/5 border border-white/10 rounded p-2 w-32"
+                    value={listing.print_spec?.[key] || ''}
+                    onChange={e => onUpdate(listing.id, {...listing, status: 'pending_review', print_spec: {...listing.print_spec, [key]: e.target.value}, visual_review: {}})} />
+                </label>
+              ))}
+            </div>
+            {listing.public_url && <a className="text-xs underline" href={listing.public_url} target="_blank" rel="noreferrer">Open full artwork for inspection</a>}
+            <label className="flex gap-2 text-xs">
+              <input type="checkbox" disabled={!listing.artwork_metadata?.sha256}
+                checked={listing.visual_review?.sha256 === listing.artwork_metadata?.sha256 && !!listing.artwork_metadata?.sha256}
+                onChange={e => onUpdate(listing.id, {...listing, visual_review: e.target.checked ? {...Object.fromEntries(VISUAL_CHECKS.map(k => [k, true])), sha256: listing.artwork_metadata.sha256} : {}})} />
+              I inspected this exact artwork and confirm all checks above for this print area.
+            </label>
+          </fieldset>
           {editing ? (
             <>
               {/* Product type selector */}
@@ -374,7 +398,10 @@ export default function ReviewQueue() {
         platform: selectedPlatform,
       });
       const productDrafts = (data.results || []).reduce((sum, item) => sum + (item.drafts_ready || 0), 0);
-      toast.success(`${productDrafts || data.pushed} mockup-ready draft${(productDrafts || data.pushed) !== 1 ? "s" : ""} created in ${destination.name}`);
+      if (data.pushed > 0) toast.success(`${productDrafts || data.pushed} mockup-ready draft${(productDrafts || data.pushed) !== 1 ? "s" : ""} created in ${destination.name}`);
+      for (const item of data.results || []) {
+        if (item.status === 'blocked') toast.error(`Print preflight blocked: ${(item.preflight?.reasons || []).join(', ')}`);
+      }
       if (data.failed > 0) toast.error(`${data.failed} artwork batch${data.failed !== 1 ? "es" : ""} produced no mockup-ready drafts`);
       if (data.pushed > 0) setTimeout(() => navigate("/dashboard"), 1500);
     } catch (err) {

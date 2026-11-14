@@ -3,6 +3,7 @@ from decimal import Decimal
 from pathlib import Path
 import hashlib
 import math
+import io
 from PIL import Image
 
 VISUAL_CHECKS = ("prompt_match", "composition", "no_crop", "no_artefacts",
@@ -10,14 +11,16 @@ VISUAL_CHECKS = ("prompt_match", "composition", "no_crop", "no_artefacts",
                  "background_suitable", "product_fit", "original_rights")
 
 def inspect_artwork(path, width_inches, height_inches, dpi=300):
+    return inspect_artwork_bytes(Path(path).read_bytes(), width_inches, height_inches, dpi)
+
+def inspect_artwork_bytes(data, width_inches, height_inches, dpi=300):
     """Use actual decoded pixels; changing DPI metadata cannot pass this gate."""
     if any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or v <= 0 for v in
            (width_inches, height_inches, dpi)):
         raise ValueError("Positive physical dimensions and DPI required")
-    data = Path(path).read_bytes()
-    with Image.open(path) as image:
+    with Image.open(io.BytesIO(data)) as image:
         image.verify()
-    with Image.open(path) as image:
+    with Image.open(io.BytesIO(data)) as image:
         width, height = image.size
         reasons = []
         if width < width_inches * dpi or height < height_inches * dpi:
@@ -31,6 +34,30 @@ def inspect_artwork(path, width_inches, height_inches, dpi=300):
     return {"sha256": hashlib.sha256(data).hexdigest(), "width": width,
             "height": height, "effective_dpi": min(width/width_inches, height/height_inches),
             "print_safe": not reasons, "reasons": reasons}
+
+def draft_preflight(metadata, spec, review):
+    """Block provider mutation until actual uploaded bytes have a size-bound review."""
+    metadata, spec, review = metadata or {}, spec or {}, review or {}
+    reasons = []
+    if not metadata or not metadata.get("sha256"):
+        reasons.append("regenerate_artwork_to_record_actual_pixels")
+    try:
+        w, h, dpi = (float(spec[k]) for k in ("width_inches", "height_inches", "dpi"))
+        if any(not math.isfinite(v) or v <= 0 for v in (w, h, dpi)):
+            raise ValueError()
+        if metadata.get("width", 0) < w*dpi or metadata.get("height", 0) < h*dpi:
+            reasons.append("insufficient_actual_pixels")
+        if abs(metadata.get("width", 0)/metadata.get("height", 1)/(w/h)-1) > .01:
+            reasons.append("aspect_ratio_would_crop_or_distort")
+    except (KeyError, TypeError, ValueError, ZeroDivisionError):
+        reasons.append("physical_print_size_and_dpi_required")
+    if review.get("sha256") != metadata.get("sha256") or not metadata.get("sha256"):
+        reasons.append("visual_review_missing_or_stale")
+    reasons += ["visual_"+key for key in VISUAL_CHECKS if review.get(key) is not True]
+    if metadata.get("blank"):
+        reasons.append("blank_artwork")
+    return {"status": "draft_allowed" if not reasons else "blocked", "reasons": reasons,
+            "sha256": metadata.get("sha256"), "published": False}
 
 def final_readiness(inspection, review, mockup_urls):
     """Bind human visual review to exact bytes and require provider mockups."""

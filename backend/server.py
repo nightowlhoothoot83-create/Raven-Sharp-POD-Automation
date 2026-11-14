@@ -14,6 +14,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 import os, uuid, json, logging, httpx, base64, bcrypt, jwt, asyncio, hmac, hashlib, io, re
 from PIL import Image
+from readiness import draft_preflight
 from platforms import (push_printify_full, push_gelato_full, push_printful_full,
     push_etsy_draft, etsy_auth_url, etsy_exchange_token,
     generate_redbubble_package, generate_teepublic_package,
@@ -1131,8 +1132,16 @@ async def _process_one_pipeline_image(run_id, idx, total, img_data, platform, ma
             seo_name = proposed_name[:120]
 
         preview_b64 = make_review_preview_b64(upscaled_b64)
+        # Measure the exact file uploaded below; DPI metadata alone proves nothing.
+        import hashlib
+        artwork_bytes = base64.b64decode(upscaled_b64)
+        with Image.open(io.BytesIO(artwork_bytes)) as artwork:
+            rgb = artwork.convert("RGB")
+            artwork_metadata = {"sha256": hashlib.sha256(artwork_bytes).hexdigest(),
+                                "width": artwork.width, "height": artwork.height,
+                                "blank": all(lo == hi for lo, hi in rgb.getextrema())}
 
-        if public_url:
+        if public_url and checkpoint.get("artwork_metadata", {}).get("sha256") == artwork_metadata["sha256"]:
             log.info(f"[{run_id}] {name}: reusing already-uploaded R2 url (checkpoint)")
         else:
             await set_step("uploading to storage")
@@ -1146,12 +1155,14 @@ async def _process_one_pipeline_image(run_id, idx, total, img_data, platform, ma
             "public_url": public_url,
             "preview_b64": preview_b64,
             "analysis": analysis,
+            "artwork_metadata": artwork_metadata,
             "status": "pending_review",
             "platform": platform,
             "edited": False,
             # Never persist full image base64 in MongoDB (16 MB document limit).
             # The image itself lives in R2; Mongo stores only its URL and metadata.
-            "checkpoint": {"public_url": public_url, "seo_name": seo_name},
+            "checkpoint": {"public_url": public_url, "seo_name": seo_name,
+                           "artwork_metadata": artwork_metadata},
         }
     except Exception as e:
         log.error(f"[{run_id}] Pipeline error for {name}: {e}")
@@ -1349,6 +1360,21 @@ async def approve_listings(run_id: str, payload: ListingApprovalIn,
     push_results = []
     for listing in approved_listings:
         try:
+            if platform in {"printify", "printful", "gelato", "etsy"}:
+                # Trust measured server records, never client-supplied pixel/hash claims.
+                stored = next((item for item in run.get("results", [])
+                               if item.get("id") == listing.get("id")), None)
+                if not stored:
+                    raise ValueError("Listing does not belong to this reviewed run")
+                check = draft_preflight(stored.get("artwork_metadata", {}),
+                                        listing.get("print_spec", {}),
+                                        listing.get("visual_review", {}))
+                if check["status"] != "draft_allowed":
+                    push_results.append({"listing_id": listing.get("id"),
+                                         "status": "blocked", "preflight": check})
+                    continue
+                # Preserve reviewed copy edits, but bind delivery URL to measured bytes.
+                listing = {**listing, "public_url": stored.get("public_url", "")}
             result = await push_to_platform(listing, platform, user)
             if platform in {"printify", "printful", "gelato"}:
                 ready_count = int(result.get("drafts_ready", result.get("count", 0)) or 0)
@@ -1367,9 +1393,11 @@ async def approve_listings(run_id: str, payload: ListingApprovalIn,
 
     # Update run status
     success = sum(1 for r in push_results if r["status"] == "draft_ready")
+    completion_status = ("completed" if success == len(push_results) and success > 0
+                         else "partial" if success else "blocked")
     await db.pipeline_runs.update_one(
         {"id": run_id},
-        {"$set": {"status": "completed", "approved_count": success,
+        {"$set": {"status": completion_status, "approved_count": success,
                   "last_export_platform": platform,
                   "completed_at": datetime.now(timezone.utc)},
          "$push": {"export_history": {

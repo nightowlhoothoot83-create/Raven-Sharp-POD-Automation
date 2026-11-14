@@ -5,13 +5,24 @@ import httpx
 import platforms
 from pathlib import Path
 from PIL import Image
-from readiness import inspect_artwork, final_readiness, quote_margin, VISUAL_CHECKS
+from readiness import inspect_artwork, inspect_artwork_bytes, draft_preflight, final_readiness, quote_margin, VISUAL_CHECKS
 
 class ReadinessTests(unittest.TestCase):
     def test_invalid_physical_dimensions(self):
         for value in (float('nan'), float('inf'), True, 0, -1):
             with self.subTest(value=value), self.assertRaises(ValueError):
-                inspect_artwork('unused.png', value, 10)
+                inspect_artwork_bytes(b'', value, 10)
+
+    def test_provider_draft_requires_measured_size_and_review(self):
+        meta = {'sha256': 'exact', 'width': 2400, 'height': 3000, 'blank': False}
+        review = dict.fromkeys(VISUAL_CHECKS, True)
+        review['sha256'] = 'exact'
+        spec = {'width_inches': 8, 'height_inches': 10, 'dpi': 300}
+        self.assertEqual(draft_preflight(meta, spec, review)['status'], 'draft_allowed')
+        self.assertEqual(draft_preflight({}, spec, review)['status'], 'blocked')
+        self.assertEqual(draft_preflight(meta, {}, review)['status'], 'blocked')
+        self.assertEqual(draft_preflight(meta, {**spec, 'width_inches': 20}, review)['status'], 'blocked')
+        self.assertEqual(draft_preflight(meta, spec, {**review, 'sha256': 'stale'})['status'], 'blocked')
 
     def test_pixels_not_metadata(self):
         with tempfile.TemporaryDirectory() as directory:

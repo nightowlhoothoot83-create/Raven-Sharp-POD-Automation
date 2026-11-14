@@ -6,9 +6,11 @@ Inspected main `d55e5ef558da3fb1048df69f014e4479829ccfc9`, all 15 remote branche
 
 Preserves the multi-provider Printify, Gelato and Printful handlers, unpublished product creation, and authentic mockup polling. Printify no longer treats missing costs as zero or prices every variant from the first variant's cost. Unknown-cost variants are excluded; the highest known cost among enabled variants informs pricing. Reported gross production margin is explicitly not a net margin.
 
-`backend/readiness.py` provides offline actual-pixel/aspect/blank checks, exact-asset hash binding for visual review, provider-mockup provenance confirmation and full-cost contribution calculations. It is a callable preflight, **not wired into existing publication routes**. Visual quality and rights cannot be established by checking pixels; the reviewer must inspect the exact asset and authentic provider mockups.
+`backend/readiness.py` provides actual-pixel/aspect/blank checks, exact-asset hash binding for visual review, provider-mockup provenance confirmation and full-cost contribution calculations. The existing reviewed draft route now blocks Printify, Gelato, Printful and Etsy mutations unless server-measured artwork records, declared physical size/DPI and exact-asset visual review pass. The review interface supplies size and review controls. Old runs without measured metadata must be processed again. The server binds the outgoing URL to its saved record; checkpoint URLs are only reused with a matching asset hash. Visual quality and rights cannot be established by checking pixels; the reviewer must inspect the exact asset and authentic provider mockups. Physical dimensions remain reviewer-declared and must match the actual provider template. Original generation and mockup polling paths remain intact.
 
-`python -m unittest discover -s backend -p test_readiness.py -v` passes six tests: pixel-vs-DPI deception, crop/transparency, NaN/infinite inputs, review hash/missing mockup, full-cost accounting, and unknown/variant provider costs. API responses use an offline transport, with no real provider calls. Syntax compilation passed. CI adds the same checks to the existing test/build workflow; no production cron added.
+`python -m unittest discover -s backend -p test_readiness.py -v` passes seven tests: pixel-vs-DPI deception, crop/transparency, NaN/infinite inputs, review hash/missing mockup, measured draft preflight, full-cost accounting, and unknown/variant provider costs. API responses use an offline transport, with no real provider calls. Syntax compilation passed. CI adds the same checks to the existing test/build workflow; no production cron added. A run with failed or blocked items is now partial/blocked instead of complete.
+
+`python scripts/create_original_pod_batch.py` creates two original deterministic botanical compositions (Sage and Midnight): editable SVG, 2400×3000 PNG at 8×10 inches/300 DPI, clearly labelled flat previews, hash/dimension inspection manifests and truthful listing preparation. No third-party art, fonts or paid inference. These are candidate artwork, not demand-validated products or authentic product mockups. See `products/quiet-garden/`.
 
 ## Current provider evidence
 
@@ -24,7 +26,7 @@ Recommended next step: connect MyDesigns on its free plan, inspect its catalog a
 
 ## Launch blockers and next action
 
-No MyDesigns/provider account connection verified. No authentic new mockup, live product draft, checkout, order, payout or sale was created by this branch. No paid inference, subscription or fulfilment incurred. Actual current hosting bill remains unverified.
+No MyDesigns/provider account connection verified. No authentic new mockup, live product draft, checkout, order, payout or sale was created by this branch. Two original artworks and flat previews were created offline. No paid inference, subscription or fulfilment incurred. Actual current hosting bill remains unverified.
 
 Need one supported provider connection; merchant-country/Stripe onboarding; catalog product, variants, destination shipping and taxes; approved fulfilment cash cap (Printify route); current net contribution; original demand-led design; exact-asset visual review; authentic mockup; draft then verified checkout and tracking. Countries and payout delay cannot be inferred from a worldwide marketing claim. Customer support burden remains real for sizing, print faults, deliveries and replacements.
 
