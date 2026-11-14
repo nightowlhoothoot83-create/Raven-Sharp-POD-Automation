@@ -117,12 +117,18 @@ async def get_best_provider_for_blueprint(blueprint_id: int, api_key: str) -> Op
                     variants = v_res.json().get("variants", [])
                     if not variants:
                         continue
-                    base_cost_usd = (variants[0].get("cost", 0) or 0) / 100
+                    # A missing cost is unknown, never a free product. Price
+                    # for the most expensive enabled variant, not the first.
+                    priced = [v for v in variants[:12]
+                              if isinstance(v.get("cost"), (int, float)) and v["cost"] > 0]
+                    if not priced:
+                        continue
+                    base_cost_usd = max(v["cost"] for v in priced) / 100
                     is_global = any(g in (prov.get("title") or "") for g in global_providers)
                     scored.append({
                         "id": prov["id"], "title": prov.get("title", "Unknown Provider"),
                         "base_cost_usd": base_cost_usd, "variant_count": len(variants),
-                        "variants": variants[:12], "is_global": is_global,
+                        "variants": priced, "is_global": is_global,
                         "score": (20 if is_global else 0) + len(variants) - (base_cost_usd * 2),
                     })
                 except Exception:
@@ -283,6 +289,11 @@ async def push_printify_full(listing: dict, analysis: dict, image_url: str,
                 "retail_price": retail_price,
                 "margin_pct": round(((retail_price - base_cost_usd) / retail_price) * 100)
                               if retail_price else None,
+                "margin_basis": "production_only_excludes_shipping_tax_fees_refunds",
+                "net_margin_verified": False,
+                "net_contribution": None,
+                "launch_blockers": ["destination_shipping_quote", "fees_and_taxes",
+                                    "fulfilment_spending_limit", "print_safe_visual_review"],
                 "url": f"https://printify.com/app/store/{shop_id}/products/{product_id}",
             })
 
